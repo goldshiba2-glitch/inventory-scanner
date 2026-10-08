@@ -1,125 +1,15 @@
 (function () {
   "use strict";
-
-  var inventory = {};
-  var history = [];
-
-  try {
-    inventory = JSON.parse(localStorage.getItem("inventory") || "{}");
-    history = JSON.parse(localStorage.getItem("history") || "[]");
-  } catch (error) {}
-
-  function save() {
-    localStorage.setItem("inventory", JSON.stringify(inventory));
-    localStorage.setItem("history", JSON.stringify(history));
-    render();
-  }
-
-  function add() {
-    var input = document.getElementById("label");
-    var match = input.value.trim().match(/^(.+?)-(TG|E)-(\d+)$/i);
-
-    if (!match) {
-      alert("Use CODE-TG-QUANTITY or CODE-E-QUANTITY");
-      return;
-    }
-
-    var code = match[1].toLowerCase().replace(/^-/, "");
-    var language = match[2].toUpperCase();
-    var quantity = Number(match[3]);
-    var key = language + ":" + code;
-
-    inventory[key] = (inventory[key] || 0) + quantity;
-    history.push({ code: code, language: language, quantity: quantity });
-    input.value = "";
-    save();
-  }
-
-  function remove(key) {
-    delete inventory[key];
-
-    history = history.filter(function (item) {
-      return item.language + ":" + item.code !== key;
-    });
-
-    save();
-  }
-
-  function clearAll() {
-    if (confirm("Clear all entries?")) {
-      inventory = {};
-      history = [];
-      save();
-    }
-  }
-
-  function render() {
-    var rows = "";
-    var key;
-
-    for (key in inventory) {
-      if (!inventory.hasOwnProperty(key)) continue;
-
-      var parts = key.split(":");
-
-      rows +=
-        "<tr>" +
-        "<td>" + parts[1] + "</td>" +
-        "<td>" + parts[0] + "</td>" +
-        "<td>" + inventory[key] + "</td>" +
-        '<td><button data-remove="' + key + '">Delete</button></td>' +
-        "</tr>";
-    }
-
-    var historyRows = history.map(function (item, index) {
-      return (
-        "<div>" +
-        (index + 1) +
-        ". " +
-        item.code +
-        "-" +
-        item.language +
-        " — " +
-        item.quantity +
-        "</div>"
-      );
-    }).join("");
-
-    document.getElementById("app").innerHTML =
-      "<h1>Inventory Scanner</h1>" +
-      "<p>Type a code and quantity. Repeated entries are added together.</p>" +
-      '<section class="card">' +
-      '<div class="entry">' +
-      '<input id="label" placeholder="Example: T37-TG-100">' +
-      '<button id="add">Add quantity</button>' +
-      "</div>" +
-      '<button id="clear">Clear entries</button>' +
-      "</section>" +
-      '<section class="card">' +
-      "<h2>Running totals</h2>" +
-      "<table>" +
-      "<tr><th>Code</th><th>Language</th><th>Total</th><th>Action</th></tr>" +
-      rows +
-      "</table>" +
-      "</section>" +
-      '<section class="card">' +
-      "<h2>History</h2>" +
-      '<div class="history">' +
-      historyRows +
-      "</div>" +
-      "</section>";
-
-    document.getElementById("add").onclick = add;
-    document.getElementById("clear").onclick = clearAll;
-
-    var buttons = document.querySelectorAll("[data-remove]");
-
-    buttons.forEach(function (button) {
-      button.onclick = function () {
-        remove(button.getAttribute("data-remove"));
-      };
-    });
-  }
-
+  var inventory = {}, history = [], ocrPromise = null;
+  try { inventory = JSON.parse(localStorage.getItem("inventory") || "{}"); history = JSON.parse(localStorage.getItem("history") || "[]"); } catch (e) {}
+  function save(){localStorage.setItem("inventory",JSON.stringify(inventory));localStorage.setItem("history",JSON.stringify(history));render();}
+  function norm(c){c=c.toLowerCase();return /^t-?\d+$/.test(c)?"t"+c.replace(/[^0-9]/g,""):c;}
+  function add(){var x=document.getElementById("label"),m=x.value.trim().match(/^(.+?)-(TG|E)-(\d+)$/i);if(!m)return alert("Use CODE-TG-QUANTITY or CODE-E-QUANTITY");var c=norm(m[1]),l=m[2].toUpperCase(),q=Number(m[3]),k=l+":"+c;inventory[k]=(inventory[k]||0)+q;history.push({code:c,language:l,quantity:q});x.value="";save();}
+  function remove(k){delete inventory[k];history=history.filter(function(x){return x.language+":"+x.code!==k;});save();}
+  function clearAll(){if(confirm("Clear all entries?")){inventory={};history=[];save();}}
+  function loadOCR(){if(ocrPromise)return ocrPromise;ocrPromise=new Promise(function(resolve,reject){var s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";s.onload=function(){resolve(window.Tesseract);};s.onerror=function(){reject(new Error("OCR library failed to load"));};document.head.appendChild(s);});return ocrPromise;}
+  function readPhoto(){var f=document.getElementById("photo").files[0],st=document.getElementById("status"),im=document.getElementById("preview");if(!f)return alert("Choose a photo first");im.src=URL.createObjectURL(f);im.style.display="block";st.textContent="Loading OCR...";loadOCR().then(function(T){return T.recognize(f,"eng",{logger:function(x){if(x.status)st.textContent=x.status+" "+Math.round((x.progress||0)*100)+"%";}});}).then(function(r){var t=r.data.text.replace(/\s+/g," ").trim();st.textContent="OCR result:\n"+t+"\n\nCheck the field, then tap Add quantity.";var m=t.match(/([A-Za-z]+-?\d+(?:\.\d+)?)[\s-]*(TG|E)[\s-]*(\d{1,6})/i);if(m)document.getElementById("label").value=m[1]+"-"+m[2].toUpperCase()+"-"+m[3];}).catch(function(e){st.textContent="OCR unavailable: "+e.message+". Type manually instead.";});}
+  function exportExcel(){if(typeof JSZip==="undefined")return alert("Excel library is still loading. Try again in a moment.");fetch("September-Inventory.xlsx?x="+Date.now()).then(function(r){if(!r.ok)throw Error("Workbook not found");return r.arrayBuffer();}).then(JSZip.loadAsync).then(function(zip){return Promise.all([["xl/worksheets/sheet1.xml","TG"],["xl/worksheets/sheet2.xml","E"]].map(function(p){var file=zip.file(p[0]);if(!file)return Promise.resolve();return file.async("string").then(function(xml){var doc=new DOMParser().parseFromString(xml,"application/xml"),ns="http://schemas.openxmlformats.org/spreadsheetml/2006/main",cells=Array.prototype.slice.call(doc.getElementsByTagNameNS(ns,"c"));cells.forEach(function(c){var ref=c.getAttribute("r")||"";if(!/^B\d+$/.test(ref))return;var row=ref.slice(1),a=cells.filter(function(z){return z.getAttribute("r")==="A"+row})[0],m=(a&&a.textContent||"").match(/^\(([^)]+)\)/);if(!m)return;while(c.firstChild)c.removeChild(c.firstChild);c.setAttribute("t","n");var v=doc.createElementNS(ns,"v");v.textContent=String(inventory[p[1]+":"+norm(m[1])]||0);c.appendChild(v);});zip.file(p[0],new XMLSerializer().serializeToString(doc));});}));}).then(function(){return zip.generateAsync({type:"blob"});}).then(function(blob){var a=document.createElement("a"),u=URL.createObjectURL(blob);a.href=u;a.download="Inventory-Updated.xlsx";document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u);},2000);}).catch(function(e){alert("Export failed: "+e.message);});}
+  function render(){var rows="";Object.keys(inventory).forEach(function(k){var p=k.split(":");rows+="<tr><td>"+p[1]+"</td><td>"+p[0]+"</td><td>"+inventory[k]+"</td><td><button data-delete=\""+k+"\">Delete</button></td></tr>";});var hist=history.map(function(x,i){return "<div>"+(i+1)+". "+x.code+"-"+x.language+" — "+x.quantity+"</div>";}).join("");document.getElementById("app").innerHTML='<h1>Inventory Scanner</h1><p>Type a code and quantity. Repeated entries are added together.</p><section class="card"><input id="photo" type="file" accept="image/*" capture="environment"><button class="ocr" id="read">Read code from photo</button><img id="preview" class="preview"><div id="status" class="status"></div><div class="entry"><input id="label" placeholder="Example: T37-TG-100"><button id="add">Add quantity</button></div><button id="export">Download Excel</button><button id="clear">Clear entries</button></section><section class="card"><h2>Running totals</h2><div class="scroll"><table><tr><th>Code</th><th>Language</th><th>Total</th><th>Action</th></tr>'+rows+'</table></div></section><section class="card"><h2>History</h2><div class="scroll history">'+hist+'</div></section>';document.getElementById("add").onclick=add;document.getElementById("read").onclick=readPhoto;document.getElementById("export").onclick=exportExcel;document.getElementById("clear").onclick=clearAll;Array.prototype.forEach.call(document.querySelectorAll("[data-delete]"),function(b){b.onclick=function(){remove(b.getAttribute("data-delete"));};});}
   render();
 })();
