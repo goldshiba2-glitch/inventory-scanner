@@ -1,2 +1,136 @@
-(function(){"use strict";var d={},h=[],ocrReady=null;try{d=JSON.parse(localStorage.getItem("inv9")||"{}");h=JSON.parse(localStorage.getItem("hist9")||"[]")}catch(e){}function norm(c){c=c.toLowerCase().replace(/^llf$/,"lff");return /^t-?\d+$/.test(c)?"t"+c.replace(/[^0-9]/g,""):c}function save(){localStorage.setItem("inv9",JSON.stringify(d));localStorage.setItem("hist9",JSON.stringify(h));render()}function add(){var x=document.getElementById("label"),m=x.value.trim().match(/^(.+?)-(TG|E)-(\d+)$/i);if(!m)return alert("Use CODE-TG-QUANTITY or CODE-E-QUANTITY");var c=norm(m[1]),l=m[2].toUpperCase(),q=Number(m[3]),k=l+":"+c;d[k]=(d[k]||0)+q;h.push({c:c,l:l,q:q});x.value="";save()}function loadOCR(){if(ocrReady)return ocrReady;ocrReady=new Promise(function(resolve,reject){var s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";s.onload=function(){resolve(window.Tesseract)};s.onerror=function(){reject(new Error("OCR library could not load"))};document.head.appendChild(s)});return ocrReady}function readPhoto(){var f=document.getElementById("photo").files[0],st=document.getElementById("status"),im=document.getElementById("preview");if(!f)return alert("Take a photo first");im.src=URL.createObjectURL(f);im.style.display="block";st.textContent="Loading OCR…";loadOCR().then(function(T){return T.recognize(f,"eng",{logger:function(x){if(x.status)st.textContent=x.status+" "+Math.round((x.progress||0)*100)+"%"}})}).then(function(r){var text=r.data.text.replace(/\s+/g," ").trim();st.textContent="OCR result:
-"+text+"\n\nCheck the field, then tap Add quantity.";var m=text.match(/([A-Za-z]+-?\d+(?:\.\d+)?)[\s-]*(TG|E)[\s-]*(\d{1,6})/i);if(m)document.getElementById("label").value=m[1]+"-"+m[2].toUpperCase()+"-"+m[3]}).catch(function(e){st.textContent="OCR unavailable: "+e.message+". Type manually instead."})}function download(){alert("For this GitHub test build, use the running totals on screen. Excel export will be restored after the page is confirmed working.")}function clearAll(){if(confirm("Clear all entries?")){d={};h=[];save()}}function render(){var rows="";Object.keys(d).forEach(function(k){var p=k.split(":"),safe=k.replace(/[^a-z0-9:_-]/gi,"");rows+="<tr><td>"+p[1]+"</td><td>"+p[0]+"</td><td>"+d[k]+"</td><td><button data-del=""+safe+"">Delete</button></td></tr>"});var hist=h.map(function(x,i){return "<div>"+(i+1)+". "+x.c+"-"+x.l+" — "+x.q+"</div>"}).join("");document.getElementById("app").innerHTML='<h1>Inventory Scanner</h1><p>Type a code and quantity. Repeated entries are added together.</p><section class="card"><input id="photo" type="file" accept="image/*" capture="environment"><button class="ocr" id="read">Read code from photo</button><img id="preview" class="preview"><div id="status" class="status"></div><div class="entry"><input id="label" placeholder="Example: T37-TG-100"><button id="add">Add quantity</button></div><button id="clear">Clear entries</button></section><section class="card"><h2>Running totals</h2><div class="scroll"><table><tr><th>Code</th><th>Language</th><th>Total</th><th>Action</th></tr>'+rows+'</table></div></section><section class="card"><h2>History</h2><div class="scroll history">'+hist+'</div></section>';document.getElementById("add").onclick=add;document.getElementById("read").onclick=readPhoto;document.getElementById("clear").onclick=clearAll;Array.prototype.forEach.call(document.querySelectorAll("[data-del]"),function(b){b.onclick=function(){var k=b.getAttribute("data-del"),p=k.split(":");delete d[p[0]+":"+p[1]];h=h.filter(function(x){return x.l+":"+x.c!==k});save()}})}render()})();
+(function () {
+  "use strict";
+
+  var inventory = {};
+  var history = [];
+
+  try {
+    inventory = JSON.parse(localStorage.getItem("inventory") || "{}");
+    history = JSON.parse(localStorage.getItem("history") || "[]");
+  } catch (error) {
+    inventory = {};
+    history = [];
+  }
+
+  function normalizeCode(code) {
+    code = code.toLowerCase().replace(/^llf$/, "lff");
+
+    if (/^t-?\d+$/.test(code)) {
+      return "t" + code.replace(/[^0-9]/g, "");
+    }
+
+    return code;
+  }
+
+  function save() {
+    localStorage.setItem("inventory", JSON.stringify(inventory));
+    localStorage.setItem("history", JSON.stringify(history));
+    render();
+  }
+
+  function addQuantity() {
+    var field = document.getElementById("label");
+    var match = field.value.trim().match(/^(.+?)-(TG|E)-(\d+)$/i);
+
+    if (!match) {
+      alert("Use CODE-TG-QUANTITY or CODE-E-QUANTITY");
+      return;
+    }
+
+    var code = normalizeCode(match[1]);
+    var language = match[2].toUpperCase();
+    var quantity = Number(match[3]);
+    var key = language + ":" + code;
+
+    inventory[key] = (inventory[key] || 0) + quantity;
+    history.push({
+      code: code,
+      language: language,
+      quantity: quantity
+    });
+
+    field.value = "";
+    save();
+  }
+
+  function clearAll() {
+    if (confirm("Clear all entries?")) {
+      inventory = {};
+      history = [];
+      save();
+    }
+  }
+
+  function render() {
+    var rows = "";
+    var key;
+
+    for (key in inventory) {
+      if (!inventory.hasOwnProperty(key)) continue;
+
+      var parts = key.split(":");
+      rows +=
+        "<tr>" +
+        "<td>" + parts[1] + "</td>" +
+        "<td>" + parts[0] + "</td>" +
+        "<td>" + inventory[key] + "</td>" +
+        "</tr>";
+    }
+
+    var historyRows = history.map(function (item, index) {
+      return (
+        "<div>" +
+        (index + 1) +
+        ". " +
+        item.code +
+        "-" +
+        item.language +
+        " — " +
+        item.quantity +
+        "</div>"
+      );
+    }).join("");
+
+    document.getElementById("app").innerHTML =
+      "<h1>Inventory Scanner</h1>" +
+      "<p>Type a code and quantity. Repeated entries are added together.</p>" +
+      '<section class="card">' +
+      '<div class="entry">' +
+      '<input id="label" placeholder="Example: T37-TG-100">' +
+      '<button id="add">Add quantity</button>' +
+      "</div>" +
+      '<button id="clear">Clear entries</button>' +
+      "</section>" +
+      '<section class="card">' +
+      "<h2>Running totals</h2>" +
+      '<div class="scroll">' +
+      "<table>" +
+      "<tr><th>Code</th><th>Language</th><th>Total</th></tr>" +
+      rows +
+      "</table>" +
+      "</div>" +
+      "</section>" +
+      '<section class="card">' +
+      "<h2>History</h2>" +
+      '<div class="scroll history">' +
+      historyRows +
+      "</div>" +
+      "</section>";
+
+    document.getElementById("add").onclick = addQuantity;
+    document.getElementById("clear").onclick = clearAll;
+  }
+
+  window.onerror = function (message, source, line, column) {
+    document.getElementById("app").innerHTML =
+      "<h1>Inventory Scanner error</h1>" +
+      "<p>" +
+      message +
+      "</p>" +
+      "<p>Line: " +
+      line +
+      "</p>";
+  };
+
+  render();
+})();
