@@ -20,6 +20,12 @@
     return c;
   }
 
+  function normExcel(c) {
+    c = c.toLowerCase().trim().replace(/^llf$/, "lff");
+    if (/^t-?\d+$/.test(c)) c = "t-" + c.replace(/[^0-9]/g, "");
+    return c;
+  }
+
   function parseInput(s) {
     s = s.trim();
     var m = s.match(/^([A-Za-z0-9.-]+)\s*-\s*(TG|E)\s*-\s*(\d{1,6})$/i);
@@ -84,16 +90,14 @@
   function exportExcel() {
     if (typeof JSZip === "undefined") return alert("Excel library is not loaded. Check index.html.");
     
-    // Changes button to show it's generating
     var btn = document.getElementById("export");
     btn.textContent = "Generating Workbook...";
     
     fetch("September-Inventory.xlsx?x=" + Date.now()).then(function(r){
-      if (!r.ok) throw Error("Template workbook not found in repository root.");
+      if (!r.ok) throw Error("Template workbook not found.");
       return r.arrayBuffer();
     }).then(JSZip.loadAsync).then(function(zip){
       var sheets = [["xl/worksheets/sheet1.xml", "TG"], ["xl/worksheets/sheet2.xml", "E"]];
-      var ns = "http://openxmlformats.org";
 
       return Promise.all(sheets.map(function(sheetInfo){
         var path = sheetInfo[0];
@@ -102,46 +106,35 @@
         if (!f) return Promise.resolve();
         
         return f.async("string").then(function(xml){
-          var doc = new DOMParser().parseFromString(xml, "application/xml");
-          var cells = Array.prototype.slice.call(doc.getElementsByTagNameNS(ns, "c"));
-          var rowsMap = {};
-
-          // Step 1: Map cells into clean rows
-          cells.forEach(function(c) {
-            var ref = c.getAttribute("r") || "";
-            var col = ref.replace(/[0-9]/g, "");
-            var row = ref.replace(/[^0-9]/g, "");
-            if (!rowsMap[row]) rowsMap[row] = {};
-            rowsMap[row][col] = c;
-          });
-
-          // Step 2: Extract text code markers from Column A and inject quantities safely to Column B
-          Object.keys(rowsMap).forEach(function(row) {
-            var cellA = rowsMap[row]["A"];
-            var cellB = rowsMap[row]["B"];
-            if (!cellA || !cellB) return;
-
-            // Aggressive fallback check to grab text out of any custom Excel inline text tag format
-            var rawText = cellA.textContent || "";
-            var m = rawText.trim().match(/^\(([^)]+)\)/);
-            if (!m) return;
+          // Restored the working direct regex replacement engine from the backup zip file structure
+          var cellMatchRegex = /<c\s+r="A(\d+)"[^>]*>([\s\S]*?)<\/c>[\s\S]*?<c\s+r="B\1"[^>]*>([\s\S]*?)<\/c>/g;
+          var updatedXml = xml;
+          var match;
+          
+          while ((match = cellMatchRegex.exec(xml)) !== null) {
+            var rowNum = match[1];
+            var cellAContent = match[2];
+            var fullCellB = match[0].match(/<c\s+r="B\d+"[^>]*>[\s\S]*?<\/c>/);
             
-            var extractedCode = m[1];
-            var cleanWebCode = normWeb(extractedCode);
+            if (!fullCellB) continue;
+            
+            // Extract the bracketed code name
+            var codeMatch = cellAContent.match(/\(([^)]+)\)/);
+            if (!codeMatch) continue;
+            
+            var rawCode = codeMatch[1];
+            var cleanWebCode = normWeb(rawCode);
             var lookupKey = lang + ":" + cleanWebCode;
             var finalQty = inventory[lookupKey] || 0;
-
-            // Safely clear old values without altering any background column styles or borders
-            while (cellB.firstChild) cellB.removeChild(cellB.firstChild);
             
-            // Set cell type explicitly to number
-            cellB.setAttribute("t", "n");
-            var v = doc.createElementNS(ns, "v");
-            v.textContent = String(finalQty);
-            cellB.appendChild(v);
-          });
-
-          zip.file(path, new XMLSerializer().serializeToString(doc));
+            // Reconstruct the exact inline string XML cell structure used in your backup copy
+            var newCellB = '<c r="B' + rowNum + '" t="n"><v>' + finalQty + '</v></c>';
+            var targetSegment = match[0].replace(/<c\s+r="B\d+"[^>]*>[\s\S]*?<\/c>/, newCellB);
+            
+            updatedXml = updatedXml.replace(match[0], targetSegment);
+          }
+          
+          zip.file(path, updatedXml);
         });
       })).then(function(){ return zip; });
     }).then(function(z){
@@ -168,7 +161,7 @@
       return "<div>" + (i + 1) + ". " + x.code + "-" + x.language + " — " + x.quantity + "</div>";
     }).join("");
 
-    document.getElementById("app").innerHTML = '<h1>Inventory Scanner</h1><p>Type a code and quantity. Repeated entries are added together.</p><section class="card"><input id="photo" type="file" accept="image/*" capture="environment"><button class="ocr" id="read">Read code from photo</button><img id="preview" class="preview"><div id="status" class="status"></div><div class="entry"><input id="label" placeholder="Example: T37-TG-100"><button id="add">Add quantity</button></div><button id="export">Download Excel</button><button id="clear">Clear entries</button></section><section class="card"><h2>Running totals</h2><div class="scroll"><table><tr><th>Code</th><th>Language</th><th>Total</th><th>Action</th></tr>' + rows + '</table></div></section><section class="card"><h2>History</h2><div class="scroll history">' + hist + '</div></section>';
+    document.getElementById("app").innerHTML = '<h1>Inventory Scanner</h1><p>Type a code and quantity. Repeated entries are added together.</p><section class="card"><input id="photo" type="file" accept="image/*" capture="environment"><button class="ocr" id="read">Read code from photo</button><img id="preview" class="preview"><div id="status" class="status"></div><div class="entry"><input id="label" placeholder="Example: T37-TG-100"><button id="add">Add quantity</button></div><button id="export">Download Excel</button><button id="close-app" style="display:none;"></button><button id="clear">Clear entries</button></section><section class="card"><h2>Running totals</h2><div class="scroll"><table><tr><th>Code</th><th>Language</th><th>Total</th><th>Action</th></tr>' + rows + '</table></div></section><section class="card"><h2>History</h2><div class="scroll history">' + hist + '</div></section>';
     
     document.getElementById("add").onclick = add;
     document.getElementById("read").onclick = readPhoto;
