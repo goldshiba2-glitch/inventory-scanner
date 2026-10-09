@@ -81,76 +81,82 @@
     });
   }
 
-  // Publication schema matching your exact layout data
-  var publicationCodes = [
-    "nwt", "nwtpkt", "Others", "bhs", "bt", "lfb", "lff", "rr", "scl", "sjj", 
-    "sjjls", "sjjyls", "wcg", "yp1", "yp2", "Others", "fg", "hf", "la", "lc", 
-    "lffi", "ll", "lmd", "mb", "rj", "wfg", "ypq", "Others", "jwcd1", "jwcd9", 
-    "jwcd10", "S-4", "inv", "T-30", "T-31", "T-32", "T-33", "T-34", "T-35", 
-    "T-36", "T-37", "Others", "g18.1", "g18.2", "g18.3", "g19.1", "g19.2", 
-    "g19.3", "g20.1", "g20.2", "g20.3", "g21.1", "g21.2", "g21.3", "g22.1", 
-    "g23.1", "g24.1", "g25.1", "wp18.1", "wp18.2", "wp18.3", "wp19.1", "wp19.2", 
-    "wp19.3", "wp20.1", "wp20.2", "wp20.3", "wp21.1", "wp21.2", "wp21.3", 
-    "wp22.1", "wp23.1", "wp24.1", "wp25.1", "wp26.1"
-  ];
-
-  var publicationNames = [
-    "New World Translation", "New World Translation (pocket-size)", "Others (Bibles)",
-    "Teach Us", "Bearing Witness", "Learn From the Bible", "Enjoy Life Forever! (Book)",
-    "Pure Worship", "Scriptures for Christian Living", "\"Sing Out Joyfully\"",
-    "\"Sing Out Joyfully\" (large size)", "\"Sing Out Joyfully\"—Lyrics Only", "Courage",
-    "Young People Ask, Volume 1", "Young People Ask, Volume 2", "Others (Books)",
-    "Good News", "Happy Family", "Satisfying Life", "Was Life Created?",
-    "Enjoy Life Forever! (Brochure)", "Listen and Live", "Love People", "My Bible Lessons",
-    "Return to Jehovah", "Wisdom From the Gospels", "10 Questions", "Others (Brochures)",
-    "Contact card for jw.org", "Contact card for free Bible course", "Contact card for free Bible course",
-    "Field Service Report", "Invitation to Congregation Meetings", "View the Bible (T-30)",
-    "View the Future (T-31)", "Happy Family Life (Tract No. 32)", "Who Controls the World? (T-33)",
-    "Will Suffering End? (T-34)", "Live Again (T-35)", "Kingdom (T-36)", "Website tract (T-37)",
-    "Others (Tracts)", "Awake!", "Awake!", "Awake!", "Awake!", "Awake!", "Awake!", "Awake!", 
-    "Awake!", "Awake!", "Awake!", "Awake!", "Awake!", "Awake!", "Awake!", "Awake!", "Awake!",
-    "Watchtower (Public)", "Watchtower (Public)", "Watchtower (Public)", "Watchtower (Public)",
-    "Watchtower (Public)", "Watchtower (Public)", "Watchtower (Public)", "Watchtower (Public)",
-    "Watchtower (Public)", "Watchtower (Public)", "Watchtower (Public)", "Watchtower (Public)",
-    "Watchtower (Public)", "Watchtower (Public)", "Watchtower (Public)", "Watchtower (Public)",
-    "Watchtower (Public)"
-  ];
-
-  function generateCSVData(langFilter) {
-    var csvContent = "Publication,Quantity\r\n";
-    for (var i = 0; i < publicationCodes.length; i++) {
-      var code = publicationCodes[i];
-      var name = publicationNames[i];
-      var cleanCode = normWeb(code);
-      var lookupKey = langFilter + ":" + cleanCode;
-      var qty = inventory[lookupKey] || 0;
-      
-      var displayRow = "(" + code + ") " + name;
-      if (code === "Others") displayRow = name;
-      
-      csvContent += '"' + displayRow.replace(/"/g, '""') + '",' + qty + "\r\n";
-    }
-    return csvContent;
-  }
-
   function exportExcel() {
-    try {
-      // Create separate CSV datasets for Tagalog and English sheets to isolate them perfectly
-      var tgContent = generateCSVData("TG");
-      var eContent = generateCSVData("E");
+    if (typeof JSZip === "undefined") return alert("Excel library is not loaded. Check index.html.");
+    
+    // Changes button to show it's generating
+    var btn = document.getElementById("export");
+    btn.textContent = "Generating Workbook...";
+    
+    fetch("September-Inventory.xlsx?x=" + Date.now()).then(function(r){
+      if (!r.ok) throw Error("Template workbook not found in repository root.");
+      return r.arrayBuffer();
+    }).then(JSZip.loadAsync).then(function(zip){
+      var sheets = [["xl/worksheets/sheet1.xml", "TG"], ["xl/worksheets/sheet2.xml", "E"]];
+      var ns = "http://openxmlformats.org";
 
-      // Combine datasets into a single cleanly formatted log file that Excel parses natively
-      var combinedLog = "=== TAGALOG INVENTORY ===\r\n" + tgContent + "\r\n=== ENGLISH INVENTORY ===\r\n" + eContent;
+      return Promise.all(sheets.map(function(sheetInfo){
+        var path = sheetInfo[0];
+        var lang = sheetInfo[1];
+        var f = zip.file(path);
+        if (!f) return Promise.resolve();
+        
+        return f.async("string").then(function(xml){
+          var doc = new DOMParser().parseFromString(xml, "application/xml");
+          var cells = Array.prototype.slice.call(doc.getElementsByTagNameNS(ns, "c"));
+          var rowsMap = {};
 
-      var blob = new Blob([combinedLog], { type: "text/csv;charset=utf-8;" });
-      var u = URL.createObjectURL(blob), a = document.createElement("a");
+          // Step 1: Map cells into clean rows
+          cells.forEach(function(c) {
+            var ref = c.getAttribute("r") || "";
+            var col = ref.replace(/[0-9]/g, "");
+            var row = ref.replace(/[^0-9]/g, "");
+            if (!rowsMap[row]) rowsMap[row] = {};
+            rowsMap[row][col] = c;
+          });
+
+          // Step 2: Extract text code markers from Column A and inject quantities safely to Column B
+          Object.keys(rowsMap).forEach(function(row) {
+            var cellA = rowsMap[row]["A"];
+            var cellB = rowsMap[row]["B"];
+            if (!cellA || !cellB) return;
+
+            // Aggressive fallback check to grab text out of any custom Excel inline text tag format
+            var rawText = cellA.textContent || "";
+            var m = rawText.trim().match(/^\(([^)]+)\)/);
+            if (!m) return;
+            
+            var extractedCode = m[1];
+            var cleanWebCode = normWeb(extractedCode);
+            var lookupKey = lang + ":" + cleanWebCode;
+            var finalQty = inventory[lookupKey] || 0;
+
+            // Safely clear old values without altering any background column styles or borders
+            while (cellB.firstChild) cellB.removeChild(cellB.firstChild);
+            
+            // Set cell type explicitly to number
+            cellB.setAttribute("t", "n");
+            var v = doc.createElementNS(ns, "v");
+            v.textContent = String(finalQty);
+            cellB.appendChild(v);
+          });
+
+          zip.file(path, new XMLSerializer().serializeToString(doc));
+        });
+      })).then(function(){ return zip; });
+    }).then(function(z){
+      return z.generateAsync({ type: "blob" });
+    }).then(function(b){
+      var u = URL.createObjectURL(b), a = document.createElement("a");
       a.href = u;
-      a.download = "Inventory-Updated.csv";
+      a.download = "Inventory-Updated.xlsx";
       a.click();
+      btn.textContent = "Download Excel";
       setTimeout(function(){ URL.revokeObjectURL(u); }, 2000);
-    } catch(e) {
+    }).catch(function(e){
+      btn.textContent = "Download Excel";
       alert("Export failed: " + e.message);
-    }
+    });
   }
 
   function render(){
@@ -162,7 +168,7 @@
       return "<div>" + (i + 1) + ". " + x.code + "-" + x.language + " — " + x.quantity + "</div>";
     }).join("");
 
-    document.getElementById("app").innerHTML = '<h1>Inventory Scanner</h1><p>Type a code and quantity. Repeated entries are added together.</p><section class="card"><input id="photo" type="file" accept="image/*" capture="environment"><button class="ocr" id="read">Read code from photo</button><img id="preview" class="preview"><div id="status" class="status"></div><div class="entry"><input id="label" placeholder="Example: T37-TG-100"><button id="add">Add quantity</button></div><button id="export">Download Data</button><button id="clear">Clear entries</button></section><section class="card"><h2>Running totals</h2><div class="scroll"><table><tr><th>Code</th><th>Language</th><th>Total</th><th>Action</th></tr>' + rows + '</table></div></section><section class="card"><h2>History</h2><div class="scroll history">' + hist + '</div></section>';
+    document.getElementById("app").innerHTML = '<h1>Inventory Scanner</h1><p>Type a code and quantity. Repeated entries are added together.</p><section class="card"><input id="photo" type="file" accept="image/*" capture="environment"><button class="ocr" id="read">Read code from photo</button><img id="preview" class="preview"><div id="status" class="status"></div><div class="entry"><input id="label" placeholder="Example: T37-TG-100"><button id="add">Add quantity</button></div><button id="export">Download Excel</button><button id="clear">Clear entries</button></section><section class="card"><h2>Running totals</h2><div class="scroll"><table><tr><th>Code</th><th>Language</th><th>Total</th><th>Action</th></tr>' + rows + '</table></div></section><section class="card"><h2>History</h2><div class="scroll history">' + hist + '</div></section>';
     
     document.getElementById("add").onclick = add;
     document.getElementById("read").onclick = readPhoto;
