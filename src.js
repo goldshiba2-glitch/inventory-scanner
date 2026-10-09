@@ -103,7 +103,6 @@
     return validCodesMaster.indexOf(code.toLowerCase().trim()) !== -1;
   }
 
-  // Safe manual clean string join method for older browser script compatibility
   function escapeHtml(str) {
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
@@ -229,61 +228,20 @@
       var rowStyle = isValid ? "" : ' style="color: #d9534f; font-weight: bold; background-color: #fdf7f7;"';
       var warningBadge = isValid ? "" : ' <span style="font-size: 10px; display: inline-block; background: #d9534f; color: white; padding: 1px 4px; border-radius: 3px; margin-top: 2px; vertical-align: middle;">⚠️ Invalid</span>';
 
-      return "<tr" + rowStyle + "><td style='word-break: break-all; max-width: 110px; vertical-align: middle; padding: 8px 4px;'>" + escapeHtml(p[1]) + warningBadge + "</td><td style='vertical-align: middle; padding: 8px 4px;'>" + escapeHtml(p[0]) + "</td><td style='vertical-align: middle; padding: 8px 4px;'>" + inventory[k] + "</td><td style='vertical-align: middle; padding: 8px 4px;'><button data-delete=\"" + escapeHtml(k) + "\" style='padding: 4px 8px; font-size: 12px;'>Delete</button></td></tr>";
+      return `<tr${rowStyle}><td style='word-break: break-all; max-width: 110px; vertical-align: middle; padding: 8px 4px;'>${escapeHtml(p[1])}${warningBadge}</td><td style='vertical-align: middle; padding: 8px 4px;'>${escapeHtml(p[0])}</td><td style='vertical-align: middle; padding: 8px 4px;'>${inventory[k]}</td><td style='vertical-align: middle; padding: 8px 4px;'><button data-delete="${escapeHtml(k)}" style='padding: 4px 8px; font-size: 12px;'>Delete</button></td></tr>`;
     }).join("");
 
     var hist = history.map(function(x, i){
       var isValid = isCodeValid(x.code);
       var itemStyle = isValid ? ' style="word-break: break-all; margin-bottom: 3px;"' : ' style="color: #d9534f; font-weight: bold; word-break: break-all; margin-bottom: 3px;"';
-      return "<div" + itemStyle + ">" + (i + 1) + ". " + escapeHtml(x.code) + "-" + escapeHtml(x.language) + " — " + x.quantity + "</div>";
+      return `<div${itemStyle}>${i + 1}. ${escapeHtml(x.code)}-${escapeHtml(x.language)} — ${x.quantity}</div>`;
     }).join("");
 
-    // Rebuilt string block utilizing clean Javascript line breaking concatenation variables to guarantee standard CSS parsing
-    var htmlContent = '';
-    htmlContent += '<h1>Inventory Scanner</h1>';
-    htmlContent += '<p>Paste your entire notepad checklist here. Math symbols (+) are calculated automatically!</p>';
-    htmlContent += '<section class="card">';
-    htmlContent += '  <input id="photo" type="file" accept="image/*" capture="environment" style="width:100%; box-sizing:border-box;">';
-htmlContent += '  Read code from photo';
-htmlContent += '  ';
-htmlContent += '  ';
-htmlContent += '  ';
-htmlContent += '    ';
-htmlContent += '    Process List Counts';
-htmlContent += '  ';
-htmlContent += '  ';
-htmlContent += '    Reporting Month:';
-htmlContent += '    ';
-htmlContent += '      JanuaryFebruaryMarchAprilMayJuneJulyAugustSeptemberOctoberNovemberDecember';
-htmlContent += '    ';
-htmlContent += '  ';
-htmlContent += '  Download Excel';
-htmlContent += '  Clear entries';
-htmlContent += '';
-htmlContent += '';
-htmlContent += '  Running totals';
-htmlContent += '  ';
-htmlContent += '    ';
-htmlContent += '      ';
-htmlContent += '      ';
-htmlContent += '        CodeLangTotalAction';
-htmlContent += '      ';
-htmlContent += '      ' + rows + '';
-htmlContent += '    ';
-htmlContent += '  ';
-htmlContent += '';
-htmlContent += '';
-htmlContent += '  History';
-htmlContent += '  ' + hist + '';
-htmlContent += '';
-document.getElementById("app").innerHTML = htmlContent;
-document.getElementById("add-bulk").onclick = processBulkInput;
-document.getElementById("read").onclick = readPhoto;
-document.getElementById("export").onclick = exportExcel;
-document.getElementById("clear").onclick = clearAll;
-Array.prototype.forEach.call(document.querySelectorAll("[data-delete]"), function(b){
-b.onclick = function(){ remove(b.getAttribute("data-delete")); };
-});
-}
-render();
-})();
+    // Reconstructed layout utilizing ES6 Backticks to handle clean multi-line elements natively
+    document.getElementById("app").innerHTML = `
+      <h1>Inventory Scanner</h1>
+      <p>Paste your entire notepad checklist here. Math symbols (+) are calculated automatically!</p>
+      <section class="card">
+        <input id="photo" type="file" accept="image/*" capture="environment" style="width:100%; box-sizing:border-box;">
+        <button class="ocr" id="read">Read code from photo</button>
+        <img id="preview" class="preview" style="display:none; max-width:100%; margin-top:10px; border-radius:4px;">
