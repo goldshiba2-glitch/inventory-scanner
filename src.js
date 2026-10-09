@@ -20,12 +20,6 @@
     return c;
   }
 
-  function normExcel(c) {
-    c = c.toLowerCase().trim().replace(/^llf$/, "lff");
-    if (/^t-?\d+$/.test(c)) c = "t-" + c.replace(/[^0-9]/g, "");
-    return c;
-  }
-
   function parseInput(s) {
     s = s.trim();
     var m = s.match(/^([A-Za-z0-9.-]+)\s*-\s*(TG|E)\s*-\s*(\d{1,6})$/i);
@@ -81,7 +75,7 @@
       var t = r.data.text.replace(/\s+/g, " ").trim();
       st.textContent = "OCR result:\n" + t + "\n\nCheck the field, then tap Add quantity.";
       var m = t.match(/([A-Za-z0-9.-]+)[\s-]*(TG|E)[\s-]*(\d{1,6})/i);
-      if (m) document.getElementById("label").value = m[1] + "-" + m[2].toUpperCase() + "-" + m[3];
+      if (m) document.getElementById("label").value = m[1]+"-"+m[2].toUpperCase()+"-"+m[3];
     }).catch(function(e){
       st.textContent = "OCR unavailable: " + e.message + ". Type manually instead.";
     });
@@ -106,7 +100,6 @@
         if (!f) return Promise.resolve();
         
         return f.async("string").then(function(xml){
-          // Restored the working direct regex replacement engine from the backup zip file structure
           var cellMatchRegex = /<c\s+r="A(\d+)"[^>]*>([\s\S]*?)<\/c>[\s\S]*?<c\s+r="B\1"[^>]*>([\s\S]*?)<\/c>/g;
           var updatedXml = xml;
           var match;
@@ -118,7 +111,6 @@
             
             if (!fullCellB) continue;
             
-            // Extract the bracketed code name
             var codeMatch = cellAContent.match(/\(([^)]+)\)/);
             if (!codeMatch) continue;
             
@@ -127,7 +119,6 @@
             var lookupKey = lang + ":" + cleanWebCode;
             var finalQty = inventory[lookupKey] || 0;
             
-            // Reconstruct the exact inline string XML cell structure used in your backup copy
             var newCellB = '<c r="B' + rowNum + '" t="n"><v>' + finalQty + '</v></c>';
             var targetSegment = match[0].replace(/<c\s+r="B\d+"[^>]*>[\s\S]*?<\/c>/, newCellB);
             
@@ -141,8 +132,13 @@
       return z.generateAsync({ type: "blob" });
     }).then(function(b){
       var u = URL.createObjectURL(b), a = document.createElement("a");
+      
+      // Pulls selected reporting month dynamically to build custom filename
+      var monthSelect = document.getElementById("report-month");
+      var selectedMonth = monthSelect ? monthSelect.value : "September";
+      
       a.href = u;
-      a.download = "Inventory-Updated.xlsx";
+      a.download = selectedMonth + "-Inventory.xlsx";
       a.click();
       btn.textContent = "Download Excel";
       setTimeout(function(){ URL.revokeObjectURL(u); }, 2000);
@@ -161,7 +157,8 @@
       return "<div>" + (i + 1) + ". " + x.code + "-" + x.language + " — " + x.quantity + "</div>";
     }).join("");
 
-    document.getElementById("app").innerHTML = '<h1>Inventory Scanner</h1><p>Type a code and quantity. Repeated entries are added together.</p><section class="card"><input id="photo" type="file" accept="image/*" capture="environment"><button class="ocr" id="read">Read code from photo</button><img id="preview" class="preview"><div id="status" class="status"></div><div class="entry"><input id="label" placeholder="Example: T37-TG-100"><button id="add">Add quantity</button></div><button id="export">Download Excel</button><button id="close-app" style="display:none;"></button><button id="clear">Clear entries</button></section><section class="card"><h2>Running totals</h2><div class="scroll"><table><tr><th>Code</th><th>Language</th><th>Total</th><th>Action</th></tr>' + rows + '</table></div></section><section class="card"><h2>History</h2><div class="scroll history">' + hist + '</div></section>';
+    // Added a custom selection dropdown for reporting months cleanly styled inside the controller layout card
+    document.getElementById("app").innerHTML = '<h1>Inventory Scanner</h1><p>Type a code and quantity. Repeated entries are added together.</p><section class="card"><input id="photo" type="file" accept="image/*" capture="environment"><button class="ocr" id="read">Read code from photo</button><img id="preview" class="preview"><div id="status" class="status"></div><div class="entry"><input id="label" placeholder="Example: T37-TG-100"><button id="add">Add quantity</button></div><div class="month-selector" style="margin-bottom: 15px;"><label for="report-month" style="font-weight: bold; margin-right: 10px; display: block; margin-bottom: 5px;">Reporting Month:</label><select id="report-month" style="padding: 8px; width: 100%; border-radius: 4px; border: 1px solid #ccc; max-width: 300px; font-size: 14px;"><option value="January">January</option><option value="February">February</option><option value="March">March</option><option value="April">April</option><option value="May">May</option><option value="June">June</option><option value="July">July</option><option value="August">August</option><option value="September" selected>September</option><option value="October">October</option><option value="November">November</option><option value="December">December</option></select></div><button id="export">Download Excel</button><button id="clear">Clear entries</button></section><section class="card"><h2>Running totals</h2><div class="scroll"><table><tr><th>Code</th><th>Language</th><th>Total</th><th>Action</th></tr>' + rows + '</table></div></section><section class="card"><h2>History</h2><div class="scroll history">' + hist + '</div></section>';
     
     document.getElementById("add").onclick = add;
     document.getElementById("read").onclick = readPhoto;
