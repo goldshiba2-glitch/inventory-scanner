@@ -32,26 +32,80 @@
     return c;
   }
 
-  function parseInput(s) {
-    s = s.trim();
-    var m = s.match(/^([A-Za-z0-9.-]+)\s*-\s*(TG|E)\s*-\s*(\d{1,6})$/i);
-    if (!m) return null;
-    return { code: m[1], lang: m[2].toUpperCase(), qty: parseInt(m[3], 10) };
-  }
+  function processBulkInput() {
+    var area = document.getElementById("bulk-notepad");
+    if (!area) return;
+    
+    var lines = area.value.split("\n");
+    var processedCount = 0;
+    var skippedCount = 0;
 
-  function add() {
-    var i = document.getElementById("label"), p = parseInput(i.value);
-    if (!p) return alert("Use CODE-TG-QUANTITY or CODE-E-QUANTITY");
-    var c = normWeb(p.code), l = p.lang, q = p.qty, k = l + ":" + c;
-    inventory[k] = (inventory[k] || 0) + q;
-    history.push({ code: c, language: l, quantity: q });
-    i.value = "";
+    lines.forEach(function(rawLine) {
+      var line = rawLine.trim();
+      if (!line) return;
+
+      var parts = line.split("-");
+      if (parts.length < 3) {
+        skippedCount++;
+        return;
+      }
+
+      var rawCode = parts[0].trim();
+      var rawLang = parts[1].trim().toUpperCase();
+      var mathExpression = parts.slice(2).join("-").trim();
+
+      var cleanLangMatch = rawLang.match(/^[A-Z0-9.]+/);
+      if (!cleanLangMatch) {
+        skippedCount++;
+        return;
+      }
+      var finalLang = cleanLangMatch[0];
+      if (finalLang !== "TG" && finalLang !== "E") {
+        var alternateLang = rawCode.toUpperCase();
+        if (alternateLang === "TG" || alternateLang === "E") {
+          var temp = finalLang.toLowerCase();
+          finalLang = alternateLang;
+          rawCode = temp;
+        } else {
+          skippedCount++;
+          return;
+        }
+      }
+
+      var numbers = mathExpression.split("+");
+      var finalQty = 0;
+      numbers.forEach(function(numStr) {
+        var cleanNum = parseInt(numStr.replace(/[^0-9]/g, ""), 10);
+        if (!isNaN(cleanNum)) {
+          finalQty += cleanNum;
+        }
+      });
+
+      var cleanWebCode = normWeb(rawCode);
+      var lookupKey = finalLang + ":" + cleanWebCode;
+
+      inventory[lookupKey] = (inventory[lookupKey] || 0) + finalQty;
+      history.push({ code: cleanWebCode, language: finalLang, quantity: finalQty });
+      processedCount++;
+    });
+
+    area.value = "";
     save();
+    
+    if (skippedCount > 0) {
+      alert("Successfully loaded " + processedCount + " items! Skipped " + skippedCount + " lines due to formatting rules.");
+    } else {
+      alert("Success! Handled all " + processedCount + " notepad lines smoothly.");
+    }
   }
 
-  // Double check code legitimacy before rendering or plotting inside tables
   function isCodeValid(code) {
     return validCodesMaster.indexOf(code.toLowerCase().trim()) !== -1;
+  }
+
+  // Safe manual clean string join method for older browser script compatibility
+  function escapeHtml(str) {
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
   function remove(k) {
@@ -90,9 +144,12 @@
       return T.recognize(f, "eng", { logger: function(x){ if (x.status) st.textContent = x.status + " " + Math.round((x.progress||0)*100) + "%"; } });
     }).then(function(r){
       var t = r.data.text.replace(/\s+/g, " ").trim();
-      st.textContent = "OCR result:\n" + t + "\n\nCheck the field, then tap Add quantity.";
+      st.textContent = "OCR result:\n" + t + "\n\nCheck the field, paste into notepad or tap Add below.";
       var m = t.match(/([A-Za-z0-9.-]+)[\s-]*(TG|E)[\s-]*(\d{1,6})/i);
-      if (m) document.getElementById("label").value = m[1]+"-"+m[2].toUpperCase()+"-"+m[3];
+      if (m) {
+        var TargetInput = document.getElementById("bulk-notepad");
+        if(TargetInput) TargetInput.value += (TargetInput.value ? "\n" : "") + m[1]+"-"+m[2].toUpperCase()+"-"+m[3];
+      }
     }).catch(function(e){
       st.textContent = "OCR unavailable: " + e.message + ". Type manually instead.";
     });
@@ -169,29 +226,64 @@
       var p = k.split(":");
       var isValid = isCodeValid(p[1]);
       
-      // Inline styles to turn typo rows red and display an alert text badge warning
       var rowStyle = isValid ? "" : ' style="color: #d9534f; font-weight: bold; background-color: #fdf7f7;"';
-      var warningBadge = isValid ? "" : ' <span style="font-size: 11px; background: #d9534f; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 5px;">⚠️ Invalid Code</span>';
+      var warningBadge = isValid ? "" : ' <span style="font-size: 10px; display: inline-block; background: #d9534f; color: white; padding: 1px 4px; border-radius: 3px; margin-top: 2px; vertical-align: middle;">⚠️ Invalid</span>';
 
-      return "<tr" + rowStyle + "><td>" + p[1] + warningBadge + "</td><td>" + p[0] + "</td><td>" + inventory[k] + "</td><td><button data-delete=\"" + k + "\">Delete</button></td></tr>";
-    }).join(""),
-    hist = history.map(function(x, i){
-      var isValid = isCodeValid(x.code);
-      var itemStyle = isValid ? "" : ' style="color: #d9534f; font-weight: bold;"';
-      return "<div" + itemStyle + ">" + (i + 1) + ". " + x.code + "-" + x.language + " — " + x.quantity + "</div>";
+      return "<tr" + rowStyle + "><td style='word-break: break-all; max-width: 110px; vertical-align: middle; padding: 8px 4px;'>" + escapeHtml(p[1]) + warningBadge + "</td><td style='vertical-align: middle; padding: 8px 4px;'>" + escapeHtml(p[0]) + "</td><td style='vertical-align: middle; padding: 8px 4px;'>" + inventory[k] + "</td><td style='vertical-align: middle; padding: 8px 4px;'><button data-delete=\"" + escapeHtml(k) + "\" style='padding: 4px 8px; font-size: 12px;'>Delete</button></td></tr>";
     }).join("");
 
-    document.getElementById("app").innerHTML = '<h1>Inventory Scanner</h1><p>Type a code and quantity. Repeated entries are added together.</p><section class="card"><input id="photo" type="file" accept="image/*" capture="environment"><button class="ocr" id="read">Read code from photo</button><img id="preview" class="preview"><div id="status" class="status"></div><div class="entry"><input id="label" placeholder="Example: T37-TG-100"><button id="add">Add quantity</button></div><div class="month-selector" style="margin-bottom: 15px;"><label for="report-month" style="font-weight: bold; margin-right: 10px; display: block; margin-bottom: 5px;">Reporting Month:</label><select id="report-month" style="padding: 8px; width: 100%; border-radius: 4px; border: 1px solid #ccc; max-width: 300px; font-size: 14px;"><option value="January">January</option><option value="February">February</option><option value="March">March</option><option value="April">April</option><option value="May">May</option><option value="June">June</option><option value="July">July</option><option value="August">August</option><option value="September" selected>September</option><option value="October">October</option><option value="November">November</option><option value="December">December</option></select></div><button id="export">Download Excel</button><button id="clear">Clear entries</button></section><section class="card"><h2>Running totals</h2><div class="scroll"><table><tr><th>Code</th><th>Language</th><th>Total</th><th>Action</th></tr>' + rows + '</table></div></section><section class="card"><h2>History</h2><div class="scroll history">' + hist + '</div></section>';
-    
-    document.getElementById("add").onclick = add;
-    document.getElementById("read").onclick = readPhoto;
-    document.getElementById("export").onclick = exportExcel;
-    document.getElementById("clear").onclick = clearAll;
-    
-    Array.prototype.forEach.call(document.querySelectorAll("[data-delete]"), function(b){
-      b.onclick = function(){ remove(b.getAttribute("data-delete")); };
-    });
-  }
-  
-  render();
+    var hist = history.map(function(x, i){
+      var isValid = isCodeValid(x.code);
+      var itemStyle = isValid ? ' style="word-break: break-all; margin-bottom: 3px;"' : ' style="color: #d9534f; font-weight: bold; word-break: break-all; margin-bottom: 3px;"';
+      return "<div" + itemStyle + ">" + (i + 1) + ". " + escapeHtml(x.code) + "-" + escapeHtml(x.language) + " — " + x.quantity + "</div>";
+    }).join("");
+
+    // Rebuilt string block utilizing clean Javascript line breaking concatenation variables to guarantee standard CSS parsing
+    var htmlContent = '';
+    htmlContent += '<h1>Inventory Scanner</h1>';
+    htmlContent += '<p>Paste your entire notepad checklist here. Math symbols (+) are calculated automatically!</p>';
+    htmlContent += '<section class="card">';
+    htmlContent += '  <input id="photo" type="file" accept="image/*" capture="environment" style="width:100%; box-sizing:border-box;">';
+htmlContent += '  Read code from photo';
+htmlContent += '  ';
+htmlContent += '  ';
+htmlContent += '  ';
+htmlContent += '    ';
+htmlContent += '    Process List Counts';
+htmlContent += '  ';
+htmlContent += '  ';
+htmlContent += '    Reporting Month:';
+htmlContent += '    ';
+htmlContent += '      JanuaryFebruaryMarchAprilMayJuneJulyAugustSeptemberOctoberNovemberDecember';
+htmlContent += '    ';
+htmlContent += '  ';
+htmlContent += '  Download Excel';
+htmlContent += '  Clear entries';
+htmlContent += '';
+htmlContent += '';
+htmlContent += '  Running totals';
+htmlContent += '  ';
+htmlContent += '    ';
+htmlContent += '      ';
+htmlContent += '      ';
+htmlContent += '        CodeLangTotalAction';
+htmlContent += '      ';
+htmlContent += '      ' + rows + '';
+htmlContent += '    ';
+htmlContent += '  ';
+htmlContent += '';
+htmlContent += '';
+htmlContent += '  History';
+htmlContent += '  ' + hist + '';
+htmlContent += '';
+document.getElementById("app").innerHTML = htmlContent;
+document.getElementById("add-bulk").onclick = processBulkInput;
+document.getElementById("read").onclick = readPhoto;
+document.getElementById("export").onclick = exportExcel;
+document.getElementById("clear").onclick = clearAll;
+Array.prototype.forEach.call(document.querySelectorAll("[data-delete]"), function(b){
+b.onclick = function(){ remove(b.getAttribute("data-delete")); };
+});
+}
+render();
 })();
