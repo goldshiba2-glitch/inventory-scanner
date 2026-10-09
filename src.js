@@ -1,14 +1,14 @@
+// Click "Save Content to File" at the top right to download this as a clean script file instantly!
 (function(){
   "use strict";
   
   var inventory = {}, history = [], ocrPromise = null;
   
-  // Master validation list of all official publication codes inside your template workbook
   var validCodesMaster = [
     "nwt", "nwtpkt", "bhs", "bt", "lfb", "lff", "rr", "scl", "sjj", "sjjls", 
     "sjjyls", "wcg", "yp1", "yp2", "fg", "hf", "la", "lc", "lffi", "ll", 
-    "lmd", "mb", "rj", "wfg", "ypq", "jwcd1", "jwcd9", "jwcd10", "S-4", "inv", 
-    "t30", "t31", "t32", "t33", "t34", "t35", "t36", "t37", "g18.1", "g18.2", 
+    "lmd", "mb", "rj", "wfg", "ypq", "jwcd1", "jwcd4", "jwcd9", "jwcd10", "S-4", "inv", 
+    "t30", "t31", "t32", "t33", "t34", "t35", "t36", "t37", "kr", "g18.1", "g18.2", 
     "g18.3", "g19.1", "g19.2", "g19.3", "g20.1", "g20.2", "g20.3", "g21.1", 
     "g21.2", "g21.3", "g22.1", "g23.1", "g24.1", "g25.1", "wp18.1", "wp18.2", 
     "wp18.3", "wp19.1", "wp19.2", "wp19.3", "wp20.1", "wp20.2", "wp20.3", 
@@ -93,7 +93,7 @@
     save();
     
     if (skippedCount > 0) {
-      alert("Successfully loaded " + processedCount + " items! Skipped " + skippedCount + " lines due to formatting rules.");
+      alert("Loaded " + processedCount + " items! Skipped " + skippedCount + " line errors.");
     } else {
       alert("Success! Handled all " + processedCount + " notepad lines smoothly.");
     }
@@ -143,25 +143,24 @@
       return T.recognize(f, "eng", { logger: function(x){ if (x.status) st.textContent = x.status + " " + Math.round((x.progress||0)*100) + "%"; } });
     }).then(function(r){
       var t = r.data.text.replace(/\s+/g, " ").trim();
-      st.textContent = "OCR result:\n" + t + "\n\nCheck the field, paste into notepad or tap Add below.";
+      st.textContent = "OCR result:\n" + t + "\n\nCheck fields.";
       var m = t.match(/([A-Za-z0-9.-]+)[\s-]*(TG|E)[\s-]*(\d{1,6})/i);
       if (m) {
         var TargetInput = document.getElementById("bulk-notepad");
         if(TargetInput) TargetInput.value += (TargetInput.value ? "\n" : "") + m[1]+"-"+m[2].toUpperCase()+"-"+m[3];
       }
     }).catch(function(e){
-      st.textContent = "OCR unavailable: " + e.message + ". Type manually instead.";
+      st.textContent = "OCR unavailable: " + e.message;
     });
   }
 
   function exportExcel() {
-    if (typeof JSZip === "undefined") return alert("Excel library is not loaded. Check index.html.");
-    
+    if (typeof JSZip === "undefined") return alert("Excel library missing.");
     var btn = document.getElementById("export");
     btn.textContent = "Generating Workbook...";
     
     fetch("September-Inventory.xlsx?x=" + Date.now()).then(function(r){
-      if (!r.ok) throw Error("Template workbook not found.");
+      if (!r.ok) throw Error("Template missing.");
       return r.arrayBuffer();
     }).then(JSZip.loadAsync).then(function(zip){
       var sheets = [["xl/worksheets/sheet1.xml", "TG"], ["xl/worksheets/sheet2.xml", "E"]];
@@ -181,7 +180,6 @@
             var rowNum = match[1];
             var cellAContent = match[2];
             var fullCellB = match[0].match(/<c\s+r="B\d+"[^>]*>[\s\S]*?<\/c>/);
-            
             if (!fullCellB) continue;
             
             var codeMatch = cellAContent.match(/\(([^)]+)\)/);
@@ -194,10 +192,8 @@
             
             var newCellB = '<c r="B' + rowNum + '" t="n"><v>' + finalQty + '</v></c>';
             var targetSegment = match[0].replace(/<c\s+r="B\d+"[^>]*>[\s\S]*?<\/c>/, newCellB);
-            
             updatedXml = updatedXml.replace(match[0], targetSegment);
           }
-          
           zip.file(path, updatedXml);
         });
       })).then(function(){ return zip; });
@@ -205,10 +201,8 @@
       return z.generateAsync({ type: "blob" });
     }).then(function(b){
       var u = URL.createObjectURL(b), a = document.createElement("a");
-      
       var monthSelect = document.getElementById("report-month");
       var selectedMonth = monthSelect ? monthSelect.value : "September";
-      
       a.href = u;
       a.download = selectedMonth + "-Inventory.xlsx";
       a.click();
@@ -224,24 +218,62 @@
     var rows = Object.keys(inventory).map(function(k){
       var p = k.split(":");
       var isValid = isCodeValid(p[1]);
-      
-      var rowStyle = isValid ? "" : ' style="color: #d9534f; font-weight: bold; background-color: #fdf7f7;"';
-      var warningBadge = isValid ? "" : ' <span style="font-size: 10px; display: inline-block; background: #d9534f; color: white; padding: 1px 4px; border-radius: 3px; margin-top: 2px; vertical-align: middle;">⚠️ Invalid</span>';
-
-      return `<tr${rowStyle}><td style='word-break: break-all; max-width: 110px; vertical-align: middle; padding: 8px 4px;'>${escapeHtml(p[1])}${warningBadge}</td><td style='vertical-align: middle; padding: 8px 4px;'>${escapeHtml(p[0])}</td><td style='vertical-align: middle; padding: 8px 4px;'>${inventory[k]}</td><td style='vertical-align: middle; padding: 8px 4px;'><button data-delete="${escapeHtml(k)}" style='padding: 4px 8px; font-size: 12px;'>Delete</button></td></tr>`;
+      var rowStyle = isValid ? "" : ' style="color:#d9534f; font-weight:bold; background-color:#fdf7f7;"';
+      var warningBadge = isValid ? "" : ' <span style="font-size:10px; display:inline-block; background:#d9534f; color:white; padding:1px 4px; border-radius:3px; margin-top:2px;">⚠️ Invalid</span>';
+      return '<tr' + rowStyle + '><td style="word-break:break-all; max-width:110px; padding:8px 4px;">' + escapeHtml(p[1]) + warningBadge + '</td><td style="padding:8px 4px;">' + escapeHtml(p[0]) + '</td><td style="padding:8px 4px;">' + inventory[k] + '</td><td style="padding:8px 4px;"><button data-delete="' + escapeHtml(k) + '" style="padding:4px 8px; font-size:12px;">Delete</button></td></tr>';
     }).join("");
 
     var hist = history.map(function(x, i){
       var isValid = isCodeValid(x.code);
-      var itemStyle = isValid ? ' style="word-break: break-all; margin-bottom: 3px;"' : ' style="color: #d9534f; font-weight: bold; word-break: break-all; margin-bottom: 3px;"';
-      return `<div${itemStyle}>${i + 1}. ${escapeHtml(x.code)}-${escapeHtml(x.language)} — ${x.quantity}</div>`;
+      var itemStyle = isValid ? ' style="word-break:break-all; margin-bottom:3px;"' : ' style="color:#d9534f; font-weight:bold; word-break:break-all; margin-bottom:3px;"';
+      return '<div' + itemStyle + '>' + (i + 1) + '. ' + escapeHtml(x.code) + '-' + escapeHtml(x.language) + ' — ' + x.quantity + '</div>';
     }).join("");
 
-    // Reconstructed layout utilizing ES6 Backticks to handle clean multi-line elements natively
-    document.getElementById("app").innerHTML = `
-      <h1>Inventory Scanner</h1>
-      <p>Paste your entire notepad checklist here. Math symbols (+) are calculated automatically!</p>
-      <section class="card">
-        <input id="photo" type="file" accept="image/*" capture="environment" style="width:100%; box-sizing:border-box;">
-        <button class="ocr" id="read">Read code from photo</button>
-        <img id="preview" class="preview" style="display:none; max-width:100%; margin-top:10px; border-radius:4px;">
+    var h = '';
+    h += '<h1>Inventory Scanner</h1>';
+    h += '<p>Paste your entire notepad checklist here. Math symbols (+) are calculated automatically!</p>';
+    h += '<section class="card">';
+    h += '  <input id="photo" type="file" accept="image/*" capture="environment" style="width:100%; box-sizing:border-box;">';
+    h += '  <button class="ocr" id="read">Read code from photo</button>';
+    h += '  <img id="preview" class="preview" style="display:none; max-width:100%; margin-top:10px; border-radius:4px;">';
+    h += '  <div id="status" class="status"></div>';
+    h += '  <div class="entry-bulk" style="margin-bottom:15px; margin-top:15px;">';
+    h += '    ';
+h += '    Process List Counts';
+h += '  ';
+h += '  ';
+h += '    Reporting Month:';
+h += '    ';
+h += '      JanuaryFebruaryMarchAprilMayJuneJulyAugustSeptemberOctoberNovemberDecember';
+h += '    ';
+h += '  ';
+h += '  Download Excel';
+h += '  Clear entries';
+h += '';
+h += '';
+h += '  Running totals';
+h += '  ';
+h += '    ';
+h += '      ';
+h += '      ';
+h += '        CodeLangTotalAction';
+h += '      ';
+h += '      ' + rows + '';
+h += '    ';
+h += '  ';
+h += '';
+h += '';
+h += '  History';
+h += '  ' + hist + '';
+h += '';
+document.getElementById("app").innerHTML = h;
+document.getElementById("add-bulk").onclick = processBulkInput;
+document.getElementById("read").onclick = readPhoto;
+document.getElementById("export").onclick = exportExcel;
+document.getElementById("clear").onclick = clearAll;
+Array.prototype.forEach.call(document.querySelectorAll("[data-delete]"), function(b){
+b.onclick = function(){ remove(b.getAttribute("data-delete")); };
+});
+}
+render();
+})();
