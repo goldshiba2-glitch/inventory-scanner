@@ -121,17 +121,17 @@
             if (!cellA || !cellB) return;
 
             var code = null;
-            var tEl = cellA.getElementsByTagNameNS(ns, "t")[0];
-            var vEl = cellA.getElementsByTagNameNS(ns, "v")[0];
-            var rawText = tEl ? tEl.textContent : (vEl ? vEl.textContent : (cellA.textContent || ""));
+            var tEl = cellA.getElementsByTagNameNS(ns, "t");
+            var vEl = cellA.getElementsByTagNameNS(ns, "v");
+            var rawText = tEl.length ? tEl[0].textContent : (vEl.length ? vEl[0].textContent : (cellA.textContent || ""));
             
             var m = rawText.trim().match(/^\(([^)]+)\)/);
             if (m) code = m[1];
 
             if (!code) return;
             
-            var cleanExcelCode = normExcel(code);
-            var lookupKey = lang + ":" + normWeb(cleanExcelCode);
+            var cleanWebCode = normWeb(code);
+            var lookupKey = lang + ":" + cleanWebCode;
             var finalQty = inventory[lookupKey] || 0;
 
             while (cellB.firstChild) cellB.removeChild(cellB.firstChild);
