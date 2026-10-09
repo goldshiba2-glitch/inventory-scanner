@@ -3,6 +3,18 @@
   
   var inventory = {}, history = [], ocrPromise = null;
   
+  // Master validation list of all official publication codes inside your template workbook
+  var validCodesMaster = [
+    "nwt", "nwtpkt", "bhs", "bt", "lfb", "lff", "rr", "scl", "sjj", "sjjls", 
+    "sjjyls", "wcg", "yp1", "yp2", "fg", "hf", "la", "lc", "lffi", "ll", 
+    "lmd", "mb", "rj", "wfg", "ypq", "jwcd1", "jwcd9", "jwcd10", "S-4", "inv", 
+    "t30", "t31", "t32", "t33", "t34", "t35", "t36", "t37", "g18.1", "g18.2", 
+    "g18.3", "g19.1", "g19.2", "g19.3", "g20.1", "g20.2", "g20.3", "g21.1", 
+    "g21.2", "g21.3", "g22.1", "g23.1", "g24.1", "g25.1", "wp18.1", "wp18.2", 
+    "wp18.3", "wp19.1", "wp19.2", "wp19.3", "wp20.1", "wp20.2", "wp20.3", 
+    "wp21.1", "wp21.2", "wp21.3", "wp22.1", "wp23.1", "wp24.1", "wp25.1", "wp26.1"
+  ];
+
   try {
     inventory = JSON.parse(localStorage.getItem("inventory") || "{}");
     history = JSON.parse(localStorage.getItem("history") || "[]");
@@ -35,6 +47,11 @@
     history.push({ code: c, language: l, quantity: q });
     i.value = "";
     save();
+  }
+
+  // Double check code legitimacy before rendering or plotting inside tables
+  function isCodeValid(code) {
+    return validCodesMaster.indexOf(code.toLowerCase().trim()) !== -1;
   }
 
   function remove(k) {
@@ -114,7 +131,7 @@
             var codeMatch = cellAContent.match(/\(([^)]+)\)/);
             if (!codeMatch) continue;
             
-            var rawCode = codeMatch[1];
+            var rawCode = codeMatch[1].trim();
             var cleanWebCode = normWeb(rawCode);
             var lookupKey = lang + ":" + cleanWebCode;
             var finalQty = inventory[lookupKey] || 0;
@@ -133,7 +150,6 @@
     }).then(function(b){
       var u = URL.createObjectURL(b), a = document.createElement("a");
       
-      // Pulls selected reporting month dynamically to build custom filename
       var monthSelect = document.getElementById("report-month");
       var selectedMonth = monthSelect ? monthSelect.value : "September";
       
@@ -151,13 +167,20 @@
   function render(){
     var rows = Object.keys(inventory).map(function(k){
       var p = k.split(":");
-      return "<tr><td>" + p[1] + "</td><td>" + p[0] + "</td><td>" + inventory[k] + "</td><td><button data-delete=\"" + k + "\">Delete</button></td></tr>";
+      var isValid = isCodeValid(p[1]);
+      
+      // Inline styles to turn typo rows red and display an alert text badge warning
+      var rowStyle = isValid ? "" : ' style="color: #d9534f; font-weight: bold; background-color: #fdf7f7;"';
+      var warningBadge = isValid ? "" : ' <span style="font-size: 11px; background: #d9534f; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 5px;">⚠️ Invalid Code</span>';
+
+      return "<tr" + rowStyle + "><td>" + p[1] + warningBadge + "</td><td>" + p[0] + "</td><td>" + inventory[k] + "</td><td><button data-delete=\"" + k + "\">Delete</button></td></tr>";
     }).join(""),
     hist = history.map(function(x, i){
-      return "<div>" + (i + 1) + ". " + x.code + "-" + x.language + " — " + x.quantity + "</div>";
+      var isValid = isCodeValid(x.code);
+      var itemStyle = isValid ? "" : ' style="color: #d9534f; font-weight: bold;"';
+      return "<div" + itemStyle + ">" + (i + 1) + ". " + x.code + "-" + x.language + " — " + x.quantity + "</div>";
     }).join("");
 
-    // Added a custom selection dropdown for reporting months cleanly styled inside the controller layout card
     document.getElementById("app").innerHTML = '<h1>Inventory Scanner</h1><p>Type a code and quantity. Repeated entries are added together.</p><section class="card"><input id="photo" type="file" accept="image/*" capture="environment"><button class="ocr" id="read">Read code from photo</button><img id="preview" class="preview"><div id="status" class="status"></div><div class="entry"><input id="label" placeholder="Example: T37-TG-100"><button id="add">Add quantity</button></div><div class="month-selector" style="margin-bottom: 15px;"><label for="report-month" style="font-weight: bold; margin-right: 10px; display: block; margin-bottom: 5px;">Reporting Month:</label><select id="report-month" style="padding: 8px; width: 100%; border-radius: 4px; border: 1px solid #ccc; max-width: 300px; font-size: 14px;"><option value="January">January</option><option value="February">February</option><option value="March">March</option><option value="April">April</option><option value="May">May</option><option value="June">June</option><option value="July">July</option><option value="August">August</option><option value="September" selected>September</option><option value="October">October</option><option value="November">November</option><option value="December">December</option></select></div><button id="export">Download Excel</button><button id="clear">Clear entries</button></section><section class="card"><h2>Running totals</h2><div class="scroll"><table><tr><th>Code</th><th>Language</th><th>Total</th><th>Action</th></tr>' + rows + '</table></div></section><section class="card"><h2>History</h2><div class="scroll history">' + hist + '</div></section>';
     
     document.getElementById("add").onclick = add;
