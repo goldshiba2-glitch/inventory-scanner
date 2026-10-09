@@ -4,6 +4,7 @@
   var inventory = {};
   var history = [];
   var customPublications = {};
+  var deletedPublications = {};
   var ocrPromise = null;
   var zipPromise = null;
   var selectedMonth = "September";
@@ -52,8 +53,7 @@
     });
   }
 
-  // Migrate the earlier storage format (code: "Books") to
-  // code: { category: "Books", active: true }.
+  // Support the older storage format and the newer custom-code format.
   function normalizeCustomRegistry(saved) {
     var result = {};
 
@@ -83,7 +83,32 @@
     return result;
   }
 
-  // Load previously saved data.
+  function normalizeDeletedRegistry(saved) {
+    var result = {};
+
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) {
+      return result;
+    }
+
+    Object.keys(saved).forEach(function (originalCode) {
+      var code = normCode(originalCode);
+      var value = saved[originalCode];
+
+      if (!code) return;
+
+      var category = value && typeof value === "object"
+        ? value.category
+        : value;
+
+      result[code] = {
+        category: validCategory(category) ? category : "Books"
+      };
+    });
+
+    return result;
+  }
+
+  // Load saved inventory, history, custom codes, and deleted-code records.
   try {
     var savedInventory = JSON.parse(
       localStorage.getItem("inventory") || "{}"
@@ -95,6 +120,10 @@
 
     var savedCustom = JSON.parse(
       localStorage.getItem("customPublications") || "{}"
+    );
+
+    var savedDeleted = JSON.parse(
+      localStorage.getItem("deletedPublications") || "{}"
     );
 
     if (
@@ -110,27 +139,36 @@
     }
 
     customPublications = normalizeCustomRegistry(savedCustom);
+    deletedPublications = normalizeDeletedRegistry(savedDeleted);
   } catch (error) {
     inventory = {};
     history = [];
     customPublications = {};
+    deletedPublications = {};
   }
 
-  function isCustomCode(code) {
+  function isDeletedCode(code) {
     return Object.prototype.hasOwnProperty.call(
-      customPublications,
+      deletedPublications,
       normCode(code)
     );
+  }
+
+  // Keep a record of deletions so codes aren't re-imported from an old template.
+  function isCustomCode(code) {
+    code = normCode(code);
+
+    return Object.prototype.hasOwnProperty.call(customPublications, code) ||
+      isDeletedCode(code);
   }
 
   function isCodeActive(code) {
     code = normCode(code);
 
-    if (validCodes[code]) {
-      return true;
-    }
+    if (isDeletedCode(code)) return false;
+    if (validCodes[code]) return true;
 
-    return isCustomCode(code) &&
+    return Object.prototype.hasOwnProperty.call(customPublications, code) &&
       customPublications[code].active !== false;
   }
 
@@ -160,8 +198,12 @@
   function getCategory(code) {
     code = normCode(code);
 
-    if (isCustomCode(code)) {
+    if (Object.prototype.hasOwnProperty.call(customPublications, code)) {
       return categoryLabel(customPublications[code].category);
+    }
+
+    if (isDeletedCode(code)) {
+      return categoryLabel(deletedPublications[code].category);
     }
 
     return validCodes[code] ? "Standard publication" : "Uncategorized";
@@ -175,11 +217,9 @@
     }
   }
 
-  // Page styling.
+  // Add styling without requiring changes to style.css.
   function addStyles() {
-    if (document.getElementById("inventory-scanner-styles")) {
-      return;
-    }
+    if (document.getElementById("inventory-scanner-styles")) return;
 
     var style = document.createElement("style");
     style.id = "inventory-scanner-styles";
@@ -199,12 +239,14 @@
       ".publication-fields input,.publication-fields select{display:block;box-sizing:border-box;width:100%;margin-top:6px;padding:10px;border:1px solid #c9ced6;border-radius:7px;background:#fff}",
       "#preview{display:none;max-width:100%;max-height:260px;margin-top:12px;border-radius:8px}",
       "#status{white-space:pre-wrap;font-size:13px;color:#475467;margin-top:10px}.inv-history{max-height:220px;overflow:auto;font-family:Consolas,monospace;font-size:13px}",
+      "#scan-results{margin-top:12px}#scan-results input{box-sizing:border-box;border:1px solid #c9ced6;border-radius:6px}",
       "@media(max-width:600px){.inv-title{font-size:23px}.inv-card{padding:14px}.publication-fields{grid-template-columns:1fr}}"
     ].join("\n");
 
     document.head.appendChild(style);
   }
 
+  // Save all data locally in this browser.
   function save() {
     try {
       localStorage.setItem("inventory", JSON.stringify(inventory));
@@ -214,6 +256,11 @@
         "customPublications",
         JSON.stringify(customPublications)
       );
+
+      localStorage.setItem(
+        "deletedPublications",
+        JSON.stringify(deletedPublications)
+      );
     } catch (error) {
       console.warn("Inventory could not be saved in this browser.", error);
     }
@@ -221,7 +268,7 @@
     render();
   }
 
-  // Add a new publication or update/reactivate an existing custom code.
+  // Add a custom publication or update its category.
   function addPublicationCode(event) {
     event.preventDefault();
 
@@ -251,7 +298,13 @@
       return;
     }
 
-    var existed = isCustomCode(code);
+    var existed = Object.prototype.hasOwnProperty.call(
+      customPublications,
+      code
+    );
+
+    // Re-adding a deleted code explicitly restores it.
+    delete deletedPublications[code];
 
     customPublications[code] = {
       category: category,
@@ -261,7 +314,7 @@
     save();
 
     setStatus(
-      (existed ? "Updated/reactivated publication " : "Added publication code ") +
+      (existed ? "Updated publication " : "Added publication code ") +
       code + " (" + categoryLabel(category) + ")."
     );
 
@@ -273,29 +326,29 @@
     }
   }
 
-  // Retiring a custom code removes its current totals from counting,
-  // but preserves history and the definition for possible reactivation.
-  function retirePublicationCode(code) {
+  // Delete the custom definition and current totals but keep its history.
+  function deletePublicationCode(code) {
     code = normCode(code);
 
-    if (!isCustomCode(code)) {
+    if (!Object.prototype.hasOwnProperty.call(customPublications, code)) {
       return;
     }
 
     var record = customPublications[code];
 
-    if (record.active === false) {
-      return;
-    }
-
     if (!window.confirm(
-      "Retire publication '" + code +
-      "'? It will no longer be accepted or counted in future monthly reports. Its history will be kept."
+      "Delete publication '" + code +
+      "'? Its current inventory totals will be removed. Its history will remain. Download Updated Template to remove its row from the workbook."
     )) {
       return;
     }
 
-    record.active = false;
+    // This record prevents an old template from bringing the deleted code back.
+    deletedPublications[code] = {
+      category: record.category || "Books"
+    };
+
+    delete customPublications[code];
 
     Object.keys(inventory).forEach(function (key) {
       var separator = key.indexOf(":");
@@ -309,30 +362,12 @@
     save();
 
     setStatus(
-      "Retired " + code +
-      ". Its current totals were removed; its history was preserved. " +
-      "Download an updated template to remove it from the official workbook layout."
+      "Deleted " + code +
+      " from Publication Codes. Download Updated Template, then replace September-Inventory.xlsx in GitHub to make the deletion permanent for all visitors."
     );
   }
 
-  function reactivatePublicationCode(code) {
-    code = normCode(code);
-
-    if (!isCustomCode(code)) {
-      return;
-    }
-
-    customPublications[code].active = true;
-
-    save();
-
-    setStatus(
-      "Reactivated " + code +
-      ". It can be counted again in future inventory entries."
-    );
-  }
-
-  // Read checklist lines such as: nwt - TG - 1500 + 375 + 2125
+  // Parse checklist lines such as CODE - TG - 100 + 25.
   function parseBulkLine(line) {
     var match = String(line || "").match(
       /^\s*(.*?)\s*-\s*(TG|E)\s*-\s*(.*?)\s*$/i
@@ -386,17 +421,13 @@
   function processBulkInput() {
     var area = document.getElementById("bulk-notepad");
 
-    if (!area) {
-      return;
-    }
+    if (!area) return;
 
     var processed = 0;
     var skippedLines = [];
 
     area.value.split(/\r?\n/).forEach(function (rawLine) {
-      if (!rawLine.trim()) {
-        return;
-      }
+      if (!rawLine.trim()) return;
 
       var item = parseBulkLine(rawLine);
 
@@ -419,7 +450,7 @@
       processed++;
     });
 
-    // Keep skipped or retired/unknown lines for correction.
+    // Keep unrecognized/deleted lines for correction.
     area.value = skippedLines.join("\n");
 
     save();
@@ -429,7 +460,7 @@
         "Loaded " + processed + " line(s). " +
         skippedLines.length +
         " line(s) were not processed because their format/code is invalid " +
-        "or the publication is retired. Those lines remain in the checklist."
+        "or the publication is deleted/unregistered. Those lines remain in the checklist."
       );
     } else {
       alert("Success! Loaded " + processed + " line(s).");
@@ -448,7 +479,7 @@
 
   function clearAll() {
     if (!window.confirm(
-      "Clear all inventory entries and history? Custom publication definitions, including retired codes, will be kept."
+      "Clear all inventory entries and history? Custom publication codes and deleted-code records will be kept."
     )) {
       return;
     }
@@ -459,7 +490,7 @@
     save();
   }
 
-  // Load browser libraries when needed.
+  // Load browser libraries only when required.
   function loadLibrary(url, globalName, libraryName) {
     if (window[globalName]) {
       return Promise.resolve(window[globalName]);
@@ -527,14 +558,136 @@
     );
   }
 
-  // Read publication codes from a photo using OCR.
+  function escapeRegex(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  // Detect registered codes in OCR text, even when the image has no quantity.
+  function detectPublicationCodes(text) {
+    var codes = Object.keys(validCodes);
+
+    Object.keys(customPublications).forEach(function (code) {
+      if (isCodeActive(code)) {
+        codes.push(code);
+      }
+    });
+
+    codes = codes.filter(function (code, index, all) {
+      return isCodeActive(code) && all.indexOf(code) === index;
+    }).sort(function (a, b) {
+      return b.length - a.length;
+    });
+
+    var lowerText = String(text || "").toLowerCase();
+    var found = [];
+
+    codes.forEach(function (code) {
+      var regex = new RegExp(
+        "(^|[^a-z0-9])" + escapeRegex(code) + "(?=$|[^a-z0-9])",
+        "gi"
+      );
+
+      if (regex.test(lowerText)) {
+        found.push(code);
+      }
+    });
+
+    return found.sort();
+  }
+
+  // Show detected codes with editable box quantities.
+  function renderScanResults(codes) {
+    var results = document.getElementById("scan-results");
+
+    if (!results) return;
+
+    if (!codes.length) {
+      results.innerHTML =
+        '<p class="inv-muted">No registered publication codes were detected. Try a clearer photo, or add the new code in Manage Publication Codes first.</p>';
+      return;
+    }
+
+    results.innerHTML = [
+      '<p class="inv-muted">Review each detected code. Quantity starts at 1 per unique code. Adjust it to match the actual number of boxes.</p>',
+      '<div class="inv-table-wrap"><table><thead><tr><th>Detected code</th><th>Category</th><th>Quantity to add</th></tr></thead><tbody>',
+      codes.map(function (code) {
+        return '<tr data-scan-row="' + escapeHtml(code) + '">' +
+          '<td>' + escapeHtml(code) + '</td>' +
+          '<td>' + escapeHtml(getCategory(code)) + '</td>' +
+          '<td><input class="scan-quantity" type="number" min="0" step="1" value="1" aria-label="Quantity for ' +
+          escapeHtml(code) + '" style="width:100px;padding:8px"></td></tr>';
+      }).join(""),
+      '</tbody></table></div>',
+      '<div class="inv-controls"><button type="button" class="inv-btn success" id="add-scanned-results">Add scanned codes to inventory</button></div>'
+    ].join("");
+
+    document.getElementById("add-scanned-results").addEventListener(
+      "click",
+      addScannedResults
+    );
+  }
+
+  function addScannedResults() {
+    var languageSelect = document.getElementById("scan-language");
+    var language = languageSelect ? languageSelect.value : "TG";
+    var rows = document.querySelectorAll("[data-scan-row]");
+    var added = 0;
+    var ignored = 0;
+
+    Array.prototype.forEach.call(rows, function (row) {
+      var code = normCode(row.getAttribute("data-scan-row"));
+      var quantityInput = row.querySelector(".scan-quantity");
+      var quantity = quantityInput
+        ? parseInt(quantityInput.value, 10)
+        : 0;
+
+      if (
+        !isCodeActive(code) ||
+        !Number.isFinite(quantity) ||
+        quantity <= 0
+      ) {
+        ignored++;
+        return;
+      }
+
+      var key = language + ":" + code;
+
+      inventory[key] = (Number(inventory[key]) || 0) + quantity;
+
+      history.push({
+        code: code,
+        language: language,
+        quantity: quantity
+      });
+
+      added++;
+    });
+
+    if (!added) {
+      alert(
+        "No quantities were added. Enter a quantity greater than zero for at least one detected code."
+      );
+      return;
+    }
+
+    save();
+
+    setStatus(
+      "Added " + added + " detected code(s) in " + language +
+      " to inventory." +
+      (ignored ? " Skipped " + ignored + " empty/zero quantity row(s)." : "") +
+      " Download Excel to create the report."
+    );
+  }
+
+  // Upload or capture a photo, run OCR, and detect registered publication codes.
   function readPhoto() {
     var input = document.getElementById("photo");
     var file = input && input.files ? input.files[0] : null;
     var preview = document.getElementById("preview");
 
     if (!file) {
-      alert("Choose a photo first.");
+      alert("Capture a photo or choose an image of publication boxes first.");
       return;
     }
 
@@ -546,7 +699,7 @@
     preview.src = preview.dataset.objectUrl;
     preview.style.display = "block";
 
-    setStatus("Preparing photo for OCR...");
+    setStatus("Reading the photo and looking for publication codes...");
 
     var button = document.getElementById("read");
     button.disabled = true;
@@ -570,45 +723,27 @@
         : "";
 
       if (!text) {
+        renderScanResults([]);
+
         setStatus(
-          "No readable text was found. Try a clearer photo or type the line manually."
+          "No readable text was found. Try a closer, clearer photo with the code facing the camera."
         );
         return;
       }
 
-      var found = [];
+      var codes = detectPublicationCodes(text);
 
-      text.split(/\r?\n/).forEach(function (line) {
-        var item = parseBulkLine(line);
-
-        if (item) {
-          found.push(
-            item.code + " - " +
-            item.language + " - " +
-            item.quantity
-          );
-        }
-      });
-
-      var area = document.getElementById("bulk-notepad");
-
-      if (area && found.length) {
-        area.value +=
-          (area.value.trim() ? "\n" : "") +
-          found.join("\n");
-      }
+      renderScanResults(codes);
 
       setStatus(
-        (found.length
-          ? "Added " + found.length +
-            " detected line(s) to the checklist. Review them and click Process List.\n\n"
-          : "No complete inventory line was detected. Review the text below and enter the line manually.\n\n"
-        ) + "OCR text:\n" + text
+        "Photo scan complete. Found " + codes.length +
+        " unique recognized publication code(s). Choose the correct language and check quantities before adding." +
+        "\n\nRecognized text:\n" + text
       );
     }).catch(function (error) {
       setStatus(
-        "OCR unavailable: " + error.message +
-        "\nEnter the checklist manually instead."
+        "Photo scanning failed: " + error.message +
+        "\nTry another image or enter the code manually."
       );
     }).then(function () {
       button.disabled = false;
@@ -640,9 +775,7 @@
       var language = separator >= 0 ? key.slice(0, separator) : "";
       var code = separator >= 0 ? key.slice(separator + 1) : key;
 
-      if (!isCodeActive(code)) {
-        return;
-      }
+      if (!isCodeActive(code)) return;
 
       rows.push([
         code,
@@ -677,9 +810,7 @@
   function getSharedStrings(zip) {
     var file = zip.file("xl/sharedStrings.xml");
 
-    if (!file) {
-      return Promise.resolve([]);
-    }
+    if (!file) return Promise.resolve([]);
 
     return file.async("string").then(function (xml) {
       var doc = new DOMParser().parseFromString(
@@ -706,9 +837,7 @@
   }
 
   function cellText(cell, sharedStrings) {
-    if (!cell) {
-      return "";
-    }
+    if (!cell) return "";
 
     var type = cell.getAttribute("t") || "";
 
@@ -762,12 +891,14 @@
   }
 
   function rowLabel(row, sharedStrings) {
-    return cellText(findColumnCell(row, "A"), sharedStrings).trim();
+    return cellText(
+      findColumnCell(row, "A"),
+      sharedStrings
+    ).trim();
   }
 
   function readCodeFromLabel(label) {
     var match = String(label || "").match(/^\s*\(([^)]+)\)/);
-
     return match ? normCode(match[1]) : "";
   }
 
@@ -784,14 +915,11 @@
     return "";
   }
 
-  // Discover custom publications in a template uploaded to GitHub.
-  // This lets a different browser recognize the template's custom codes too.
+  // Read custom codes from an updated template after it has been published.
   function importCustomCodesFromTemplate(zip, sharedStrings) {
     var file = zip.file("xl/worksheets/sheet1.xml");
 
-    if (!file) {
-      return Promise.resolve(false);
-    }
+    if (!file) return Promise.resolve(false);
 
     return file.async("string").then(function (xml) {
       var doc = new DOMParser().parseFromString(
@@ -801,9 +929,7 @@
 
       var sheetData = doc.getElementsByTagName("sheetData")[0];
 
-      if (!sheetData) {
-        return false;
-      }
+      if (!sheetData) return false;
 
       var rows = Array.prototype.filter.call(
         sheetData.childNodes,
@@ -821,7 +947,6 @@
         var header = categoryFromHeader(label);
 
         if (header) {
-          // The first row is a column heading; the next Bibles row is the section heading.
           if (!(index === 0 && header === "Bibles")) {
             currentCategory = header;
           }
@@ -831,7 +956,11 @@
 
         var code = readCodeFromLabel(label);
 
-        if (!code || validCodes[code] || isCustomCode(code)) {
+        if (
+          !code ||
+          validCodes[code] ||
+          isCustomCode(code)
+        ) {
           return;
         }
 
@@ -843,9 +972,7 @@
         changed = true;
       });
 
-      if (changed) {
-        save();
-      }
+      if (changed) save();
 
       return changed;
     });
@@ -874,22 +1001,18 @@
     var wanted = String(category || "Books").toLowerCase();
     var headerIndex = -1;
 
-    // Row zero contains column headings. Search from row two onward.
     for (var i = 1; i < labels.length; i++) {
-      if (String(labels[i] || "").trim().toLowerCase() === wanted) {
+      if (
+        String(labels[i] || "").trim().toLowerCase() === wanted
+      ) {
         headerIndex = i;
         break;
       }
     }
 
-    if (headerIndex < 0) {
-      return labels.length;
-    }
+    if (headerIndex < 0) return labels.length;
 
-    // Public Magazines is the final category.
-    if (wanted === "public magazines") {
-      return labels.length;
-    }
+    if (wanted === "public magazines") return labels.length;
 
     var knownHeaders = publicationCategories.map(function (item) {
       return item.value.toLowerCase();
@@ -909,7 +1032,9 @@
     }
 
     for (var k = headerIndex + 1; k < nextSection; k++) {
-      if (String(labels[k] || "").trim().toLowerCase() === "others") {
+      if (
+        String(labels[k] || "").trim().toLowerCase() === "others"
+      ) {
         return k;
       }
     }
@@ -922,6 +1047,7 @@
       "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
     var row = doc.createElementNS(ns, "row");
+
     row.setAttribute("r", String(rowNumber));
     row.setAttribute("ht", "18");
     row.setAttribute("customHeight", "1");
@@ -992,8 +1118,7 @@
     cell.appendChild(value);
   }
 
-  // Rebuild one worksheet: active custom codes are placed in their categories;
-  // retired custom rows are removed. Template mode resets quantities to zero.
+  // Rebuild a worksheet with active custom codes and current quantities.
   function updateWorksheet(xml, language, sharedStrings, mode) {
     var doc = new DOMParser().parseFromString(
       xml,
@@ -1006,9 +1131,7 @@
 
     var sheetData = doc.getElementsByTagName("sheetData")[0];
 
-    if (!sheetData) {
-      return xml;
-    }
+    if (!sheetData) return xml;
 
     var originalRows = Array.prototype.filter.call(
       sheetData.childNodes,
@@ -1023,11 +1146,9 @@
     originalRows.forEach(function (row) {
       var code = readCodeFromLabel(rowLabel(row, sharedStrings));
 
-      // Recreate every registered custom code below in its current category.
-      // This also removes retired custom rows from generated workbooks.
-      if (code && isCustomCode(code)) {
-        return;
-      }
+      // Custom codes are recreated below in their current category.
+      // Deleted custom codes are excluded from the new workbook.
+      if (code && isCustomCode(code)) return;
 
       retainedRows.push(row);
     });
@@ -1039,21 +1160,15 @@
     var insertions = Object.create(null);
 
     Object.keys(customPublications).forEach(function (code) {
-      if (customPublications[code].active === false) {
-        return;
-      }
+      if (customPublications[code].active === false) return;
 
       var category = customPublications[code].category;
 
-      if (!validCategory(category)) {
-        category = "Books";
-      }
+      if (!validCategory(category)) category = "Books";
 
       var index = findInsertionIndex(labels, category);
 
-      if (!insertions[index]) {
-        insertions[index] = [];
-      }
+      if (!insertions[index]) insertions[index] = [];
 
       insertions[index].push(code);
     });
@@ -1109,9 +1224,7 @@
       var rowNumber = Number(row.getAttribute("r") || index + 1);
       var code = readCodeFromLabel(rowLabel(row, sharedStrings));
 
-      if (!code || !isCodeValid(code)) {
-        return;
-      }
+      if (!code || !isCodeValid(code)) return;
 
       var quantity = mode === "template"
         ? 0
@@ -1125,8 +1238,10 @@
 
   function transformWorkbook(zip, mode) {
     return getSharedStrings(zip).then(function (sharedStrings) {
-      // Import template custom codes before rebuilding either worksheet.
-      return importCustomCodesFromTemplate(zip, sharedStrings).then(function () {
+      return importCustomCodesFromTemplate(
+        zip,
+        sharedStrings
+      ).then(function () {
         var sheets = [
           { path: "xl/worksheets/sheet1.xml", language: "TG" },
           { path: "xl/worksheets/sheet2.xml", language: "E" }
@@ -1135,14 +1250,17 @@
         return Promise.all(sheets.map(function (sheet) {
           var file = zip.file(sheet.path);
 
-          if (!file) {
-            return Promise.resolve();
-          }
+          if (!file) return Promise.resolve();
 
           return file.async("string").then(function (xml) {
             zip.file(
               sheet.path,
-              updateWorksheet(xml, sheet.language, sharedStrings, mode)
+              updateWorksheet(
+                xml,
+                sheet.language,
+                sharedStrings,
+                mode
+              )
             );
           });
         })).then(function () {
@@ -1152,13 +1270,15 @@
     });
   }
 
-  // Monthly report: always use September's template.
-  // The selected month determines only the output filename.
+  // Use September-Inventory.xlsx as the single template.
+  // The chosen month determines the downloaded filename.
   function exportExcel() {
     var monthSelect = document.getElementById("report-month");
     var button = document.getElementById("export");
 
-    selectedMonth = monthSelect ? monthSelect.value : selectedMonth;
+    selectedMonth = monthSelect
+      ? monthSelect.value
+      : selectedMonth;
 
     if (button) {
       button.disabled = true;
@@ -1173,14 +1293,20 @@
         mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       });
     }).then(function (blob) {
-      downloadBlob(blob, selectedMonth + "-Inventory.xlsx");
+      downloadBlob(
+        blob,
+        selectedMonth + "-Inventory.xlsx"
+      );
 
       setStatus(
         "Downloaded " + selectedMonth +
         "-Inventory.xlsx with current active inventory quantities."
       );
     }).catch(function (error) {
-      console.warn("Excel export failed; downloading CSV instead.", error);
+      console.warn(
+        "Excel export failed; downloading CSV instead.",
+        error
+      );
 
       downloadCSV(selectedMonth);
 
@@ -1195,12 +1321,11 @@
     });
   }
 
-  // Create a clean updated template copy.
-  // The owner must replace the workbook in GitHub manually to make it permanent
-  // for every visitor/device.
+  // Produce a clean workbook template with custom changes and zero quantities.
+  // The owner must replace the repository's workbook manually to publish it.
   function downloadUpdatedTemplate() {
     if (!window.confirm(
-      "Create an updated template copy? Active custom codes will be included, retired custom codes removed, and all quantities reset to zero. This downloads a file; it does not directly modify GitHub."
+      "Create an updated template copy? Active custom codes will be included, deleted custom codes removed, and all quantities reset to zero. This downloads a file; it does not directly modify GitHub."
     )) {
       return;
     }
@@ -1220,15 +1345,20 @@
         mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       });
     }).then(function (blob) {
-      downloadBlob(blob, "September-Inventory-UPDATED-TEMPLATE.xlsx");
+      downloadBlob(
+        blob,
+        "September-Inventory-UPDATED-TEMPLATE.xlsx"
+      );
 
       setStatus(
-        "Updated template downloaded. To make the changes permanent for all users, replace September-Inventory.xlsx in your GitHub repository with this clean template file (rename it to September-Inventory.xlsx first)."
+        "Updated template downloaded. To make the changes permanent for all users, replace September-Inventory.xlsx in your GitHub repository with this clean template file, renamed to September-Inventory.xlsx."
       );
     }).catch(function (error) {
       console.error("Template update failed.", error);
 
-      setStatus("Could not create the updated template: " + error.message);
+      setStatus(
+        "Could not create the updated template: " + error.message
+      );
 
       alert(
         "Could not create the updated template. Make sure September-Inventory.xlsx is available and try again."
@@ -1241,13 +1371,10 @@
     });
   }
 
-  // Render the interface.
   function render() {
     app = document.getElementById("app");
 
-    if (!app) {
-      return;
-    }
+    if (!app) return;
 
     var months = [
       "January", "February", "March", "April",
@@ -1268,23 +1395,22 @@
 
     var customRows = Object.keys(customPublications).sort().map(function (code) {
       var record = customPublications[code];
-      var active = record.active !== false;
-
-      var action = active
-        ? '<button type="button" class="inv-btn danger" data-retire-code="' +
-          escapeHtml(code) + '">Retire</button>'
-        : '<button type="button" class="inv-btn success" data-reactivate-code="' +
-          escapeHtml(code) + '">Reactivate</button>';
 
       return "<tr><td>" + escapeHtml(code) +
-        (active ? "" : ' <span class="retired-badge">Retired</span>') +
+        (record.active === false
+          ? ' <span class="retired-badge">Inactive</span>'
+          : "") +
         "</td><td>" + escapeHtml(categoryLabel(record.category)) +
-        "</td><td>" + action + "</td></tr>";
-    }).join("") || '<tr><td colspan="3" class="inv-muted">No custom publication codes registered yet.</td></tr>';
+        '</td><td><button type="button" class="inv-btn danger" data-delete-code="' +
+        escapeHtml(code) + '">Delete</button></td></tr>';
+    }).join("") ||
+      '<tr><td colspan="3" class="inv-muted">No custom publication codes registered yet.</td></tr>';
 
     var keys = Object.keys(inventory).filter(function (key) {
       var separator = key.indexOf(":");
-      var code = separator >= 0 ? key.slice(separator + 1) : key;
+      var code = separator >= 0
+        ? key.slice(separator + 1)
+        : key;
 
       return isCodeActive(code);
     }).sort();
@@ -1303,16 +1429,25 @@
     }).join("");
 
     var historyRows = history.map(function (item, index) {
-      var retired = isCustomCode(item.code) &&
+      var deleted = isDeletedCode(item.code);
+      var inactive = isCustomCode(item.code) &&
+        !deleted &&
+        Object.prototype.hasOwnProperty.call(
+          customPublications,
+          normCode(item.code)
+        ) &&
         customPublications[normCode(item.code)].active === false;
 
       return '<div' +
-        (retired ? ' style="color:#667085"' : "") +
-        ">" + (index + 1) + ". " +
+        ((deleted || inactive) ? ' style="color:#667085"' : "") +
+        ">" +
+        (index + 1) + ". " +
         escapeHtml(item.code) + " - " +
         escapeHtml(item.language) + " — " +
         escapeHtml(item.quantity) +
-        (retired ? " (retired; history kept)" : "") +
+        (deleted
+          ? " (publication deleted; history kept)"
+          : (inactive ? " (inactive; history kept)" : "")) +
         "</div>";
     }).join("");
 
@@ -1322,32 +1457,43 @@
 
     app.innerHTML = [
       '<section class="inv-card"><h1 class="inv-title">Inventory Scanner</h1>',
-      '<div class="inv-muted">Paste your entire notepad checklist here. Math symbols (+) are calculated automatically.</div>',
-      '<textarea id="bulk-notepad" placeholder="Example:\nnwt - TG - 1500 + 375 + 2125\nbhs - E - 25 + 10\nS-4 - TG - 5"></textarea>',
-      '<div class="inv-controls"><button type="button" class="inv-btn" id="add-bulk">Process List</button><button type="button" class="inv-btn secondary" id="clear-text">Clear text</button></div></section>',
+      '<div class="inv-muted">Capture or upload a photo of publication boxes. The scanner looks for registered publication codes.</div></section>',
 
-      '<section class="inv-card"><h2>Manage Publication Codes</h2>',
-      '<p class="inv-muted">Register new publications and choose their category. Retire codes that should no longer be counted in monthly reports. Retiring keeps history; the updated template can remove retired codes.</p>',
+      '<section class="inv-card"><h2>1. Scan Publication Boxes</h2>',
+      '<p class="inv-muted">Choose the language printed on the boxes. The scanner detects unique registered codes; set each quantity to the number of boxes before adding.</p>',
+      '<div class="inv-controls"><label for="scan-language">Language:</label><select id="scan-language"><option value="TG">TG — Tagalog</option><option value="E">E — English</option></select>',
+      '<label for="photo">Capture or upload photo:</label><input id="photo" type="file" accept="image/*" capture="environment">',
+      '<button type="button" class="inv-btn" id="read">Scan Photo</button></div>',
+      '<img id="preview" alt="Selected photo preview">',
+      '<div id="status" aria-live="polite">Ready. Take a clear photo with publication codes facing the camera.</div>',
+      '<div id="scan-results"></div></section>',
+
+      '<section class="inv-card"><h2>2. Manage Publication Codes</h2>',
+      '<p class="inv-muted">Register new publications and choose their category. Delete a code when it is no longer needed. Deletion clears current totals; history is retained.</p>',
       '<form id="publication-form"><div class="publication-fields">',
       '<label for="new-code">Publication code<input id="new-code" type="text" maxlength="40" placeholder="e.g. newbook1" autocomplete="off" required></label>',
       '<label for="new-category">Category<select id="new-category">' + categoryOptions + '</select></label>',
       '<button type="submit" class="inv-btn">Add / Update Code</button></div></form>',
       '<div class="inv-table-wrap"><table><thead><tr><th>Custom code</th><th>Category</th><th>Action</th></tr></thead><tbody>' + customRows + '</tbody></table></div>',
-      '<p class="inv-muted">For a permanent template update: retire or add codes first, then download the updated template and commit it to GitHub.</p>',
+      '<p class="inv-muted">To make additions/deletions permanent for all visitors, download the updated template and replace September-Inventory.xlsx in GitHub with it.</p>',
       '<div class="inv-controls"><button type="button" class="inv-btn success" id="download-template">Download Updated Template</button></div></section>',
 
-      '<section class="inv-card"><h2>Read code from photo</h2><div class="inv-controls"><label for="photo">Choose a photo:</label><input id="photo" type="file" accept="image/*"><button type="button" class="inv-btn secondary" id="read">Read Photo</button></div>',
-      '<img id="preview" alt="Selected photo preview"><div id="status" aria-live="polite">Ready.</div></section>',
+      '<section class="inv-card"><h2>3. Paste a Checklist Manually</h2>',
+      '<div class="inv-muted">Use one line per item, like CODE - TG - 1500 + 375 or CODE - E - 25.</div>',
+      '<textarea id="bulk-notepad" placeholder="Example:\nnwt - TG - 1500 + 375 + 2125\nbhs - E - 25 + 10\nS-4 - TG - 5"></textarea>',
+      '<div class="inv-controls"><button type="button" class="inv-btn" id="add-bulk">Process List</button><button type="button" class="inv-btn secondary" id="clear-text">Clear text</button></div></section>',
 
-      '<section class="inv-card"><h2>Counts Reporting</h2><div class="inv-controls"><label for="report-month">Month:</label><select id="report-month">' + monthOptions + '</select>',
-      '<button type="button" class="inv-btn" id="export">Download Excel</button><button type="button" class="inv-btn danger" id="clear">Clear entries</button></div>',
+      '<section class="inv-card"><h2>4. Monthly Reporting</h2>',
+      '<div class="inv-controls"><label for="report-month">Month:</label><select id="report-month">' + monthOptions + '</select>',
+      '<button type="button" class="inv-btn" id="export">Download Excel</button>',
+      '<button type="button" class="inv-btn danger" id="clear">Clear entries</button></div>',
       '<p><strong>Running total:</strong> ' + total.toLocaleString() + '</p>',
       '<div class="inv-table-wrap"><table><thead><tr><th>Code</th><th>Category</th><th>Language</th><th>Total</th><th>Action</th></tr></thead><tbody>' +
-        (inventoryRows || '<tr><td colspan="5">No active inventory entries yet.</td></tr>') +
+      (inventoryRows || '<tr><td colspan="5">No active inventory entries yet.</td></tr>') +
       '</tbody></table></div></section>',
 
       '<section class="inv-card"><h2>History</h2><div class="inv-history">' +
-        (historyRows || '<div class="inv-muted">No history yet.</div>') +
+      (historyRows || '<div class="inv-muted">No history yet.</div>') +
       '</div></section>'
     ].join("");
 
@@ -1375,22 +1521,11 @@
     );
 
     Array.prototype.forEach.call(
-      app.querySelectorAll("[data-retire-code]"),
+      app.querySelectorAll("[data-delete-code]"),
       function (button) {
         button.addEventListener("click", function () {
-          retirePublicationCode(
-            button.getAttribute("data-retire-code")
-          );
-        });
-      }
-    );
-
-    Array.prototype.forEach.call(
-      app.querySelectorAll("[data-reactivate-code]"),
-      function (button) {
-        button.addEventListener("click", function () {
-          reactivatePublicationCode(
-            button.getAttribute("data-reactivate-code")
+          deletePublicationCode(
+            button.getAttribute("data-delete-code")
           );
         });
       }
@@ -1440,14 +1575,12 @@
     addStyles();
     render();
 
-    // Read custom codes from the published template, so a user on another
-    // browser can recognize the codes after the owner updates the template.
+    // Import custom codes already included in the published template.
     loadTemplateZip().then(function (zip) {
       return getSharedStrings(zip).then(function (sharedStrings) {
         return importCustomCodesFromTemplate(zip, sharedStrings);
       });
     }).catch(function (error) {
-      // The scanner remains usable if the workbook or CDN is unavailable.
       console.info("Template code sync skipped:", error.message);
     });
   }
