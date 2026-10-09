@@ -1,14 +1,14 @@
+// Click "Save Content to File" at the top right to download this as a clean script file instantly!
 (function(){
   "use strict";
   
   var inventory = {}, history = [], ocrPromise = null;
   
-  // Master validation list of all official publication codes inside your template workbook
   var validCodesMaster = [
     "nwt", "nwtpkt", "bhs", "bt", "lfb", "lff", "rr", "scl", "sjj", "sjjls", 
     "sjjyls", "wcg", "yp1", "yp2", "fg", "hf", "la", "lc", "lffi", "ll", 
-    "lmd", "mb", "rj", "wfg", "ypq", "jwcd1", "jwcd9", "jwcd10", "S-4", "inv", 
-    "t30", "t31", "t32", "t33", "t34", "t35", "t36", "t37", "g18.1", "g18.2", 
+    "lmd", "mb", "rj", "wfg", "ypq", "jwcd1", "jwcd4", "jwcd9", "jwcd10", "S-4", "inv", 
+    "t30", "t31", "t32", "t33", "t34", "t35", "t36", "t37", "kr", "g18.1", "g18.2", 
     "g18.3", "g19.1", "g19.2", "g19.3", "g20.1", "g20.2", "g20.3", "g21.1", 
     "g21.2", "g21.3", "g22.1", "g23.1", "g24.1", "g25.1", "wp18.1", "wp18.2", 
     "wp18.3", "wp19.1", "wp19.2", "wp19.3", "wp20.1", "wp20.2", "wp20.3", 
@@ -32,7 +32,6 @@
     return c;
   }
 
-  // Processes raw multi-line notepad text sheets and safely adds up sequential math chunks
   function processBulkInput() {
     var area = document.getElementById("bulk-notepad");
     if (!area) return;
@@ -43,9 +42,8 @@
 
     lines.forEach(function(rawLine) {
       var line = rawLine.trim();
-      if (!line) return; // Skip completely blank lines safely
+      if (!line) return;
 
-      // Super flexible match breaking lines into: [CODE] - [LANGUAGE] - [MATH STRINGS]
       var parts = line.split("-");
       if (parts.length < 3) {
         skippedCount++;
@@ -54,11 +52,8 @@
 
       var rawCode = parts[0].trim();
       var rawLang = parts[1].trim().toUpperCase();
-      
-      // Merge any trailing segments in case there are extra dashes in math expressions
       var mathExpression = parts.slice(2).join("-").trim();
 
-      // Clean up language string parameters in case format is written like (e.g. TG or E)
       var cleanLangMatch = rawLang.match(/^[A-Z0-9.]+/);
       if (!cleanLangMatch) {
         skippedCount++;
@@ -66,7 +61,6 @@
       }
       var finalLang = cleanLangMatch[0];
       if (finalLang !== "TG" && finalLang !== "E") {
-        // Fallback catch in case language structure gets swapped inside text formatting
         var alternateLang = rawCode.toUpperCase();
         if (alternateLang === "TG" || alternateLang === "E") {
           var temp = finalLang.toLowerCase();
@@ -78,7 +72,6 @@
         }
       }
 
-      // Safe evaluation engine calculating strings like "1500 + 375 + 2125" cleanly
       var numbers = mathExpression.split("+");
       var finalQty = 0;
       numbers.forEach(function(numStr) {
@@ -91,7 +84,6 @@
       var cleanWebCode = normWeb(rawCode);
       var lookupKey = finalLang + ":" + cleanWebCode;
 
-      // Commit cleanly calculated quantities into database arrays
       inventory[lookupKey] = (inventory[lookupKey] || 0) + finalQty;
       history.push({ code: cleanWebCode, language: finalLang, quantity: finalQty });
       processedCount++;
@@ -101,7 +93,7 @@
     save();
     
     if (skippedCount > 0) {
-      alert("Successfully loaded " + processedCount + " items! Skipped " + skippedCount + " lines due to formatting limits.");
+      alert("Loaded " + processedCount + " items! Skipped " + skippedCount + " line errors.");
     } else {
       alert("Success! Handled all " + processedCount + " notepad lines smoothly.");
     }
@@ -109,6 +101,10 @@
 
   function isCodeValid(code) {
     return validCodesMaster.indexOf(code.toLowerCase().trim()) !== -1;
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
   function remove(k) {
@@ -138,7 +134,7 @@
   }
 
   function readPhoto() {
-    var f = document.getElementById("photo").files, st = document.getElementById("status"), im = document.getElementById("preview");
+    var f = document.getElementById("photo").files[0], st = document.getElementById("status"), im = document.getElementById("preview");
     if (!f) return alert("Choose a photo first");
     im.src = URL.createObjectURL(f);
     im.style.display = "block";
@@ -147,32 +143,31 @@
       return T.recognize(f, "eng", { logger: function(x){ if (x.status) st.textContent = x.status + " " + Math.round((x.progress||0)*100) + "%"; } });
     }).then(function(r){
       var t = r.data.text.replace(/\s+/g, " ").trim();
-      st.textContent = "OCR result:\n" + t + "\n\nCheck the field, paste into notepad or tap Add below.";
+      st.textContent = "OCR result:\n" + t + "\n\nCheck fields.";
       var m = t.match(/([A-Za-z0-9.-]+)[\s-]*(TG|E)[\s-]*(\d{1,6})/i);
       if (m) {
         var TargetInput = document.getElementById("bulk-notepad");
-        if(TargetInput) TargetInput.value += (TargetInput.value ? "\n" : "") + m+"-"+m.toUpperCase()+"-"+m;
+        if(TargetInput) TargetInput.value += (TargetInput.value ? "\n" : "") + m[1]+"-"+m[2].toUpperCase()+"-"+m[3];
       }
     }).catch(function(e){
-      st.textContent = "OCR unavailable: " + e.message + ". Type manually instead.";
+      st.textContent = "OCR unavailable: " + e.message;
     });
   }
 
   function exportExcel() {
-    if (typeof JSZip === "undefined") return alert("Excel library is not loaded. Check index.html.");
-    
+    if (typeof JSZip === "undefined") return alert("Excel library missing.");
     var btn = document.getElementById("export");
     btn.textContent = "Generating Workbook...";
     
     fetch("September-Inventory.xlsx?x=" + Date.now()).then(function(r){
-      if (!r.ok) throw Error("Template workbook not found.");
+      if (!r.ok) throw Error("Template missing.");
       return r.arrayBuffer();
     }).then(JSZip.loadAsync).then(function(zip){
       var sheets = [["xl/worksheets/sheet1.xml", "TG"], ["xl/worksheets/sheet2.xml", "E"]];
 
       return Promise.all(sheets.map(function(sheetInfo){
-        var path = sheetInfo;
-        var lang = sheetInfo;
+        var path = sheetInfo[0];
+        var lang = sheetInfo[1];
         var f = zip.file(path);
         if (!f) return Promise.resolve();
         
@@ -182,26 +177,23 @@
           var match;
           
           while ((match = cellMatchRegex.exec(xml)) !== null) {
-            var rowNum = match;
-            var cellAContent = match;
-            var fullCellB = match.match(/<c\s+r="B\d+"[^>]*>[\s\S]*?<\/c>/);
-            
+            var rowNum = match[1];
+            var cellAContent = match[2];
+            var fullCellB = match[0].match(/<c\s+r="B\d+"[^>]*>[\s\S]*?<\/c>/);
             if (!fullCellB) continue;
             
             var codeMatch = cellAContent.match(/\(([^)]+)\)/);
             if (!codeMatch) continue;
             
-            var rawCode = codeMatch.trim();
+            var rawCode = codeMatch[1].trim();
             var cleanWebCode = normWeb(rawCode);
             var lookupKey = lang + ":" + cleanWebCode;
             var finalQty = inventory[lookupKey] || 0;
             
             var newCellB = '<c r="B' + rowNum + '" t="n"><v>' + finalQty + '</v></c>';
-            var targetSegment = match.replace(/<c\s+r="B\d+"[^>]*>[\s\S]*?<\/c>/, newCellB);
-            
-            updatedXml = updatedXml.replace(match, targetSegment);
+            var targetSegment = match[0].replace(/<c\s+r="B\d+"[^>]*>[\s\S]*?<\/c>/, newCellB);
+            updatedXml = updatedXml.replace(match[0], targetSegment);
           }
-          
           zip.file(path, updatedXml);
         });
       })).then(function(){ return zip; });
@@ -209,10 +201,8 @@
       return z.generateAsync({ type: "blob" });
     }).then(function(b){
       var u = URL.createObjectURL(b), a = document.createElement("a");
-      
       var monthSelect = document.getElementById("report-month");
       var selectedMonth = monthSelect ? monthSelect.value : "September";
-      
       a.href = u;
       a.download = selectedMonth + "-Inventory.xlsx";
       a.click();
@@ -227,21 +217,56 @@
   function render(){
     var rows = Object.keys(inventory).map(function(k){
       var p = k.split(":");
-      var isValid = isCodeValid(p);
-      
-      var rowStyle = isValid ? "" : ' style="color: #d9534f; font-weight: bold; background-color: #fdf7f7;"';
-      var warningBadge = isValid ? "" : ' <span style="font-size: 11px; background: #d9534f; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 5px;">⚠️ Invalid Code</span>';
-
-      return "<tr" + rowStyle + "><td>" + p + warningBadge + "</td><td>" + p + "</td><td>" + inventory[k] + "</td><td><button data-delete=\"" + k + "\">Delete</button></td></tr>";
-    }).join(""),
-    hist = history.map(function(x, i){
-      var isValid = isCodeValid(x.code);
-      var itemStyle = isValid ? "" : ' style="color: #d9534f; font-weight: bold;"';
-      return "<div" + itemStyle + ">" + (i + 1) + ". " + x.code + "-" + x.language + " — " + x.quantity + "</div>";
+      var isValid = isCodeValid(p[1]);
+      var rowStyle = isValid ? "" : ' style="color:#d9534f; font-weight:bold; background-color:#fdf7f7;"';
+      var warningBadge = isValid ? "" : ' <span style="font-size:10px; display:inline-block; background:#d9534f; color:white; padding:1px 4px; border-radius:3px; margin-top:2px;">⚠️ Invalid</span>';
+      return '<tr' + rowStyle + '><td style="word-break:break-all; max-width:110px; padding:8px 4px;">' + escapeHtml(p[1]) + warningBadge + '</td><td style="padding:8px 4px;">' + escapeHtml(p[0]) + '</td><td style="padding:8px 4px;">' + inventory[k] + '</td><td style="padding:8px 4px;"><button data-delete="' + escapeHtml(k) + '" style="padding:4px 8px; font-size:12px;">Delete</button></td></tr>';
     }).join("");
 
-    // Upgraded standard controller layout into a large multi-line smart text notepad screen
-document.getElementById("app").innerHTML = 'Inventory ScannerPaste your entire notepad checklist here. Math symbols (+) are calculated automatically!Read code from photoProcess List CountsReporting Month:JanuaryFebruaryMarchAprilMayJuneJulyAugustSeptemberOctoberNovemberDecemberDownload ExcelClear entriesRunning totalsCodeLanguageTotalAction' + rows + 'History' + hist + '';
+    var hist = history.map(function(x, i){
+      var isValid = isCodeValid(x.code);
+      var itemStyle = isValid ? ' style="word-break:break-all; margin-bottom:3px;"' : ' style="color:#d9534f; font-weight:bold; word-break:break-all; margin-bottom:3px;"';
+      return '<div' + itemStyle + '>' + (i + 1) + '. ' + escapeHtml(x.code) + '-' + escapeHtml(x.language) + ' — ' + x.quantity + '</div>';
+    }).join("");
+
+    var h = '';
+    h += '<h1>Inventory Scanner</h1>';
+    h += '<p>Paste your entire notepad checklist here. Math symbols (+) are calculated automatically!</p>';
+    h += '<section class="card">';
+    h += '  <input id="photo" type="file" accept="image/*" capture="environment" style="width:100%; box-sizing:border-box;">';
+    h += '  <button class="ocr" id="read">Read code from photo</button>';
+    h += '  <img id="preview" class="preview" style="display:none; max-width:100%; margin-top:10px; border-radius:4px;">';
+    h += '  <div id="status" class="status"></div>';
+    h += '  <div class="entry-bulk" style="margin-bottom:15px; margin-top:15px;">';
+    h += '    ';
+h += '    Process List Counts';
+h += '  ';
+h += '  ';
+h += '    Reporting Month:';
+h += '    ';
+h += '      JanuaryFebruaryMarchAprilMayJuneJulyAugustSeptemberOctoberNovemberDecember';
+h += '    ';
+h += '  ';
+h += '  Download Excel';
+h += '  Clear entries';
+h += '';
+h += '';
+h += '  Running totals';
+h += '  ';
+h += '    ';
+h += '      ';
+h += '      ';
+h += '        CodeLangTotalAction';
+h += '      ';
+h += '      ' + rows + '';
+h += '    ';
+h += '  ';
+h += '';
+h += '';
+h += '  History';
+h += '  ' + hist + '';
+h += '';
+document.getElementById("app").innerHTML = h;
 document.getElementById("add-bulk").onclick = processBulkInput;
 document.getElementById("read").onclick = readPhoto;
 document.getElementById("export").onclick = exportExcel;
