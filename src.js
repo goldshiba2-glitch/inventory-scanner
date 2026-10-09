@@ -651,7 +651,7 @@
     button.disabled = true;
     button.textContent = "Generating Workbook...";
 
-    var templateName = selectedMonth + "-Inventory.xlsx";
+    var templateName = "September-Inventory.xlsx";
 
     fetch(templateName + "?cache=" + Date.now(), {
       cache: "no-store"
