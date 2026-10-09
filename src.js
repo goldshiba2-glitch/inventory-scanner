@@ -3,38 +3,49 @@
 
   var inventory = {};
   var history = [];
+  var customPublications = {};
   var ocrPromise = null;
   var zipPromise = null;
-  var app = null;
   var selectedMonth = "September";
-  var previewUrl = null;
 
-  // Official publication codes
+  var publicationCategories = [
+    { value: "Bibles", label: "Bibles" },
+    { value: "Books", label: "Books" },
+    { value: "Brochures and Booklets", label: "Brochures and Booklets" },
+    { value: "Forms and Supplies", label: "Forms and Supplies" },
+    { value: "Tracts", label: "Tracts" },
+    { value: "Public Magazines", label: "Magazines" }
+  ];
+
   var validCodesMaster = [
-    "nwt", "nwtpkt", "bhs", "bt", "lfb", "lff", "rr", "scl",
-    "sjj", "sjjls", "sjjyls", "wcg", "yp1", "yp2", "fg", "hf",
-    "la", "lc", "lffi", "ll", "lmd", "mb", "rj", "wfg", "ypq",
-    "jwcd1", "jwcd9", "jwcd10", "S-4", "inv",
-    "t30", "t31", "t32", "t33", "t34", "t35", "t36", "t37",
-    "g18.1", "g18.2", "g18.3",
-    "g19.1", "g19.2", "g19.3",
-    "g20.1", "g20.2", "g20.3",
-    "g21.1", "g21.2", "g21.3",
-    "g22.1", "g23.1", "g24.1", "g25.1",
-    "wp18.1", "wp18.2", "wp18.3",
-    "wp19.1", "wp19.2", "wp19.3",
-    "wp20.1", "wp20.2", "wp20.3",
-    "wp21.1", "wp21.2", "wp21.3",
-    "wp22.1", "wp23.1", "wp24.1", "wp25.1", "wp26.1"
+    "nwt", "nwtpkt", "bhs", "bt", "lfb", "lff", "rr", "scl", "sjj", "sjjls",
+    "sjjyls", "wcg", "yp1", "yp2", "fg", "hf", "la", "lc", "lffi", "ll",
+    "lmd", "mb", "rj", "wfg", "ypq", "jwcd1", "jwcd9", "jwcd10", "S-4", "inv",
+    "t30", "t31", "t32", "t33", "t34", "t35", "t36", "t37", "g18.1", "g18.2",
+    "g18.3", "g19.1", "g19.2", "g19.3", "g20.1", "g20.2", "g20.3", "g21.1",
+    "g21.2", "g21.3", "g22.1", "g23.1", "g24.1", "g25.1", "wp18.1", "wp18.2",
+    "wp18.3", "wp19.1", "wp19.2", "wp19.3", "wp20.1", "wp20.2", "wp20.3",
+    "wp21.1", "wp21.2", "wp21.3", "wp22.1", "wp23.1", "wp24.1", "wp25.1", "wp26.1"
   ];
 
   var validCodes = Object.create(null);
 
+  function normCode(code) {
+    code = String(code || "").toLowerCase().trim().replace(/\s+/g, "");
+    code = code.replace(/^llf$/, "lff");
+
+    if (/^t-?\d+$/.test(code)) {
+      code = "t" + code.replace(/\D/g, "");
+    }
+
+    return code;
+  }
+
   validCodesMaster.forEach(function (code) {
-    validCodes[normalizeCode(code)] = true;
+    validCodes[normCode(code)] = true;
   });
 
-  // Load previously saved inventory safely
+  // Load previously saved data.
   try {
     var savedInventory = JSON.parse(
       localStorage.getItem("inventory") || "{}"
@@ -42,6 +53,10 @@
 
     var savedHistory = JSON.parse(
       localStorage.getItem("history") || "[]"
+    );
+
+    var savedCustom = JSON.parse(
+      localStorage.getItem("customPublications") || "{}"
     );
 
     if (
@@ -55,39 +70,28 @@
     if (Array.isArray(savedHistory)) {
       history = savedHistory;
     }
-  } catch (error) {
+
+    if (
+      savedCustom &&
+      typeof savedCustom === "object" &&
+      !Array.isArray(savedCustom)
+    ) {
+      customPublications = savedCustom;
+    }
+  } catch (e) {
     inventory = {};
     history = [];
+    customPublications = {};
   }
 
-  var months = [
-    "January", "February", "March", "April",
-    "May", "June", "July", "August",
-    "September", "October", "November", "December"
-  ];
+  function isCodeValid(code) {
+    code = normCode(code);
 
-  // Normalize publication codes
-  function normalizeCode(code) {
-    code = String(code || "").trim();
-
-    // Remove surrounding parentheses
-    code = code.replace(/^\((.*)\)$/, "$1");
-
-    code = code.toLowerCase().trim();
-
-    // Common correction
-    code = code.replace(/^llf$/, "lff");
-
-    // Normalize t-30, T-30, etc. to t30
-    if (/^t-?\d+$/.test(code)) {
-      code = "t" + code.replace(/[^0-9]/g, "");
-    }
-
-    return code;
+    return !!validCodes[code] ||
+      Object.prototype.hasOwnProperty.call(customPublications, code);
   }
 
-  // Escape text before inserting it into HTML
-  function escapeHTML(value) {
+  function escapeHtml(value) {
     return String(value == null ? "" : value)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
@@ -96,8 +100,28 @@
       .replace(/'/g, "&#39;");
   }
 
-  function isCodeValid(code) {
-    return !!validCodes[normalizeCode(code)];
+  function categoryLabel(category) {
+    for (var i = 0; i < publicationCategories.length; i++) {
+      if (publicationCategories[i].value === category) {
+        return publicationCategories[i].label;
+      }
+    }
+
+    return category || "Uncategorized";
+  }
+
+  function getCategory(code) {
+    code = normCode(code);
+
+    if (
+      Object.prototype.hasOwnProperty.call(customPublications, code)
+    ) {
+      return categoryLabel(customPublications[code]);
+    }
+
+    return validCodes[code]
+      ? "Standard publication"
+      : "Uncategorized";
   }
 
   function setStatus(message) {
@@ -108,80 +132,200 @@
     }
   }
 
-  // Save inventory and history
+  // Page styling.
+  function addStyles() {
+    if (document.getElementById("inventory-scanner-styles")) {
+      return;
+    }
+
+    var style = document.createElement("style");
+    style.id = "inventory-scanner-styles";
+
+    style.textContent = [
+      "#app{max-width:1100px;margin:28px auto;padding:0 18px;font-family:Arial,sans-serif;color:#202124;line-height:1.45}",
+      ".inv-card{background:#fff;border:1px solid #dfe3e8;border-radius:12px;padding:20px;margin:16px 0;box-shadow:0 2px 8px rgba(0,0,0,.04)}",
+      ".inv-title{font-size:28px;margin:0 0 6px}.inv-muted{color:#5f6368;font-size:14px}",
+      ".inv-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}",
+      ".inv-btn{border:0;border-radius:7px;padding:10px 14px;cursor:pointer;background:#155eef;color:#fff;font-weight:600}",
+      ".inv-btn.secondary{background:#eef2f7;color:#202124}.inv-btn.danger{background:#b42318;color:#fff}.inv-btn:disabled{opacity:.6;cursor:wait}",
+      "#bulk-notepad{box-sizing:border-box;width:100%;min-height:190px;padding:12px;border:1px solid #c9ced6;border-radius:8px;font:14px/1.5 Consolas,monospace;resize:vertical}",
+      ".inv-table-wrap{overflow:auto}table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;border-bottom:1px solid #e5e7eb;padding:10px 8px}th{background:#f7f8fa}tr.invalid-code{color:#b42318;background:#fff6f5}",
+      ".inv-badge{font-size:11px;background:#b42318;color:#fff;padding:2px 6px;border-radius:4px;margin-left:5px}",
+      ".publication-fields{display:grid;grid-template-columns:minmax(150px,1fr) minmax(180px,1fr) auto;gap:10px;align-items:end}",
+      ".publication-fields label{display:block;font-size:13px;font-weight:600;color:#475467}",
+      ".publication-fields input,.publication-fields select{display:block;box-sizing:border-box;width:100%;margin-top:6px;padding:10px;border:1px solid #c9ced6;border-radius:7px;background:#fff}",
+      "#preview{display:none;max-width:100%;max-height:260px;margin-top:12px;border-radius:8px}",
+      "#status{white-space:pre-wrap;font-size:13px;color:#475467;margin-top:10px}.inv-history{max-height:220px;overflow:auto;font-family:Consolas,monospace;font-size:13px}",
+      "@media(max-width:600px){.inv-title{font-size:23px}.inv-card{padding:14px}.publication-fields{grid-template-columns:1fr}}"
+    ].join("\n");
+
+    document.head.appendChild(style);
+  }
+
+  // Save inventory, history, and custom publication definitions.
   function save() {
     try {
       localStorage.setItem("inventory", JSON.stringify(inventory));
       localStorage.setItem("history", JSON.stringify(history));
-    } catch (error) {
-      console.warn("Could not save inventory locally:", error);
+      localStorage.setItem(
+        "customPublications",
+        JSON.stringify(customPublications)
+      );
+    } catch (e) {
+      console.warn("Inventory could not be saved in this browser.", e);
     }
 
     render();
   }
 
-  // Calculate expressions such as 1500 + 375 + 2125
-  function calculateQuantity(expression) {
-    var matches = String(expression || "").match(/\d[\d,]*/g) || [];
-    var total = 0;
+  // Add a new publication code or change its category.
+  function addPublicationCode(event) {
+    event.preventDefault();
 
-    matches.forEach(function (value) {
-      var number = parseInt(value.replace(/,/g, ""), 10);
+    var codeInput = document.getElementById("new-code");
+    var categoryInput = document.getElementById("new-category");
 
-      if (!isNaN(number)) {
-        total += number;
-      }
-    });
+    var code = normCode(codeInput && codeInput.value);
+    var category = categoryInput && categoryInput.value;
 
-    return {
-      total: total,
-      valid: matches.length > 0
-    };
-  }
+    if (!code) {
+      alert("Enter a publication code first.");
+      return;
+    }
 
-  // Accept CODE-TG-QUANTITY, CODE-E-QUANTITY,
-  // CODE - TG - QUANTITY, and similar formats.
-  function parseBulkLine(line) {
-    var match = String(line || "").trim().match(
-      /^\s*(.*?)\s*(?:[-–—]|\s+)\s*(TG|E)\s*(?:[-–—]|\s+)\s*(.*?)\s*$/i
+    if (!/^[a-z0-9][a-z0-9.-]*$/.test(code)) {
+      alert(
+        "Use only letters, numbers, periods, and hyphens in the code. Do not include spaces."
+      );
+      return;
+    }
+
+    if (
+      validCodes[code] &&
+      !Object.prototype.hasOwnProperty.call(customPublications, code)
+    ) {
+      alert("That code is already in the standard publication list.");
+      return;
+    }
+
+    if (
+      !publicationCategories.some(function (item) {
+        return item.value === category;
+      })
+    ) {
+      alert("Choose a category from the list.");
+      return;
+    }
+
+    var existed = Object.prototype.hasOwnProperty.call(
+      customPublications,
+      code
     );
 
-    // Also support language-first lines such as TG-NWT-100
-    if (!match) {
-      var alternate = String(line || "").trim().match(
-        /^\s*(TG|E)\s*[-–—]\s*(.+?)\s*[-–—]\s*(.*?)\s*$/i
+    customPublications[code] = category;
+
+    save();
+
+    setStatus(
+      (existed ? "Updated category for " : "Added publication code ") +
+      code + " (" + categoryLabel(category) + ")."
+    );
+
+    var refreshedInput = document.getElementById("new-code");
+
+    if (refreshedInput) {
+      refreshedInput.value = "";
+      refreshedInput.focus();
+    }
+  }
+
+  // A custom code cannot be removed while it has inventory totals.
+  function removePublicationCode(code) {
+    code = normCode(code);
+
+    var inUse = Object.keys(inventory).some(function (key) {
+      var splitAt = key.indexOf(":");
+
+      return (
+        (splitAt >= 0 ? key.slice(splitAt + 1) : key) === code
+      );
+    });
+
+    if (inUse) {
+      alert(
+        "This code still has inventory totals. Delete its inventory entries before removing the code."
+      );
+      return;
+    }
+
+    if (
+      !Object.prototype.hasOwnProperty.call(customPublications, code)
+    ) {
+      return;
+    }
+
+    if (!window.confirm("Remove custom publication code '" + code + "'?")) {
+      return;
+    }
+
+    delete customPublications[code];
+
+    save();
+
+    setStatus("Removed custom publication code " + code + ".");
+  }
+
+  // Read checklist lines such as: nwt - TG - 1500 + 375 + 2125
+  function parseBulkLine(line) {
+    var match = String(line || "").match(
+      /^\s*(.*?)\s*-\s*(TG|E)\s*-\s*(.*?)\s*$/i
+    );
+
+    var code;
+    var language;
+    var expression;
+
+    if (match) {
+      code = match[1].trim();
+      language = match[2].toUpperCase();
+      expression = match[3].trim();
+    } else {
+      match = String(line || "").match(
+        /^\s*(TG|E)\s*-\s*(.*?)\s*-\s*(.*?)\s*$/i
       );
 
-      if (alternate) {
-        match = [
-          alternate[0],
-          alternate[2],
-          alternate[1],
-          alternate[3]
-        ];
+      if (!match) {
+        return null;
       }
+
+      language = match[1].toUpperCase();
+      code = match[2].trim();
+      expression = match[3].trim();
     }
 
-    if (!match) {
+    if (!code || !expression) {
       return null;
     }
 
-    var code = normalizeCode(match[1]);
-    var language = String(match[2]).toUpperCase();
-    var quantity = calculateQuantity(match[3]);
+    var numbers = expression.match(/\d[\d,]*/g) || [];
 
-    if (!code || !quantity.valid) {
+    if (!numbers.length) {
       return null;
     }
+
+    var quantity = numbers.reduce(function (sum, value) {
+      return sum + (
+        parseInt(value.replace(/,/g, ""), 10) || 0
+      );
+    }, 0);
 
     return {
-      code: code,
+      code: normCode(code),
       language: language,
-      quantity: quantity.total
+      quantity: quantity
     };
   }
 
-  // Process multiple notepad lines
   function processBulkInput() {
     var area = document.getElementById("bulk-notepad");
 
@@ -189,27 +333,25 @@
       return;
     }
 
-    var lines = area.value.split(/\r?\n/);
-    var processedCount = 0;
-    var skippedLines = [];
+    var processed = 0;
+    var skipped = 0;
 
-    lines.forEach(function (rawLine) {
-      var line = rawLine.trim();
-
-      if (!line) {
+    area.value.split(/\r?\n/).forEach(function (rawLine) {
+      if (!rawLine.trim()) {
         return;
       }
 
-      var item = parseBulkLine(line);
+      var item = parseBulkLine(rawLine);
 
       if (!item) {
-        skippedLines.push(rawLine);
+        skipped++;
         return;
       }
 
       var key = item.language + ":" + item.code;
 
-      inventory[key] = (Number(inventory[key]) || 0) + item.quantity;
+      inventory[key] =
+        (Number(inventory[key]) || 0) + item.quantity;
 
       history.push({
         code: item.code,
@@ -217,32 +359,24 @@
         quantity: item.quantity
       });
 
-      processedCount++;
+      processed++;
     });
 
-    // Render the updated inventory
+    area.value = "";
+
     save();
 
-    // Keep any lines that need correction instead of deleting them
-    var newArea = document.getElementById("bulk-notepad");
-
-    if (newArea) {
-      newArea.value = skippedLines.join("\n");
-    }
-
-    if (skippedLines.length > 0) {
+    if (skipped) {
       alert(
-        "Processed " + processedCount + " item(s).\n" +
-        skippedLines.length +
-        " line(s) could not be read. These lines remain in the notepad for correction."
+        "Loaded " + processed + " line(s). Skipped " + skipped +
+        " line(s). Use CODE - TG - 100 + 25 or CODE - E - 100 + 25."
       );
     } else {
-      alert("Successfully processed " + processedCount + " item(s)!");
+      alert("Success! Loaded " + processed + " line(s).");
     }
   }
 
-  // Delete a code from the inventory
-  function remove(key) {
+  function removeInventory(key) {
     delete inventory[key];
 
     history = history.filter(function (item) {
@@ -252,30 +386,32 @@
     save();
   }
 
-  // Clear all inventory entries
   function clearAll() {
-    if (confirm("Are you sure you want to clear all inventory entries and history?")) {
-      inventory = {};
-      history = [];
-      save();
+    if (
+      !window.confirm(
+        "Clear all inventory entries and history? Custom publication codes will be kept."
+      )
+    ) {
+      return;
     }
+
+    inventory = {};
+    history = [];
+
+    save();
   }
 
-  // Load external browser libraries when needed
-  function loadLibrary(url, globalName) {
+  // Load an external library only when needed.
+  function loadScript(url, globalName, currentPromise) {
     if (window[globalName]) {
       return Promise.resolve(window[globalName]);
     }
 
-    if (globalName === "Tesseract" && ocrPromise) {
-      return ocrPromise;
+    if (currentPromise.value) {
+      return currentPromise.value;
     }
 
-    if (globalName === "JSZip" && zipPromise) {
-      return zipPromise;
-    }
-
-    var promise = new Promise(function (resolve, reject) {
+    currentPromise.value = new Promise(function (resolve, reject) {
       var script = document.createElement("script");
 
       script.src = url;
@@ -285,7 +421,7 @@
         if (window[globalName]) {
           resolve(window[globalName]);
         } else {
-          reject(new Error(globalName + " failed to initialize."));
+          reject(new Error(globalName + " did not initialize."));
         }
       };
 
@@ -294,127 +430,124 @@
       };
 
       document.head.appendChild(script);
+    }).catch(function (error) {
+      currentPromise.value = null;
+      throw error;
     });
 
-    if (globalName === "Tesseract") {
-      ocrPromise = promise;
-    } else if (globalName === "JSZip") {
-      zipPromise = promise;
-    }
-
-    promise.catch(function () {
-      if (globalName === "Tesseract") {
-        ocrPromise = null;
-      } else if (globalName === "JSZip") {
-        zipPromise = null;
-      }
-    });
-
-    return promise;
+    return currentPromise.value;
   }
 
   function loadOCR() {
-    return loadLibrary(
+    return loadScript(
       "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
-      "Tesseract"
+      "Tesseract",
+      {
+        get value() { return ocrPromise; },
+        set value(v) { ocrPromise = v; }
+      }
     );
   }
 
-  // Read text from an image
+  function loadJSZip() {
+    return loadScript(
+      "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
+      "JSZip",
+      {
+        get value() { return zipPromise; },
+        set value(v) { zipPromise = v; }
+      }
+    );
+  }
+
+  // Read publication codes from an image using OCR.
   function readPhoto() {
     var input = document.getElementById("photo");
     var file = input && input.files ? input.files[0] : null;
     var preview = document.getElementById("preview");
 
     if (!file) {
-      alert("Please choose a photo first.");
+      alert("Choose a photo first.");
       return;
     }
 
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
+    if (preview.dataset.objectUrl) {
+      URL.revokeObjectURL(preview.dataset.objectUrl);
     }
 
-    previewUrl = URL.createObjectURL(file);
+    preview.dataset.objectUrl = URL.createObjectURL(file);
+    preview.src = preview.dataset.objectUrl;
+    preview.style.display = "block";
 
-    if (preview) {
-      preview.src = previewUrl;
-      preview.style.display = "block";
-    }
+    setStatus("Preparing photo for OCR...");
 
-    setStatus("Loading photo recognition library...");
+    var button = document.getElementById("read");
+    button.disabled = true;
 
-    loadOCR()
-      .then(function (Tesseract) {
-        return Tesseract.recognize(file, "eng", {
-          logger: function (message) {
-            if (message.status) {
-              setStatus(
-                message.status + " " +
-                Math.round((message.progress || 0) * 100) + "%"
-              );
-            }
-          }
-        });
-      })
-      .then(function (result) {
-        var text = String(
-          result && result.data ? result.data.text : ""
-        ).trim();
-
-        if (!text) {
-          setStatus("No text was recognized. Try a clearer photo.");
-          return;
-        }
-
-        // Convert readable lines into the standard inventory format
-        var recognizedItems = [];
-
-        text.split(/\r?\n/).forEach(function (line) {
-          var item = parseBulkLine(line);
-
-          if (item) {
-            recognizedItems.push(
-              item.code + "-" +
-              item.language + "-" +
-              item.quantity
+    loadOCR().then(function (Tesseract) {
+      return Tesseract.recognize(file, "eng", {
+        logger: function (msg) {
+          if (msg && msg.status) {
+            setStatus(
+              "OCR: " + msg.status +
+              (typeof msg.progress === "number"
+                ? " " + Math.round(msg.progress * 100) + "%"
+                : "")
             );
           }
-        });
-
-        var area = document.getElementById("bulk-notepad");
-
-        if (area && recognizedItems.length > 0) {
-          area.value +=
-            (area.value.trim() ? "\n" : "") +
-            recognizedItems.join("\n");
         }
-
-        var message = "OCR completed.\n";
-
-        if (recognizedItems.length > 0) {
-          message +=
-            "Added " + recognizedItems.length +
-            " recognized inventory line(s) to the notepad.\n\n";
-        } else {
-          message +=
-            "No complete inventory lines were detected. Enter them manually after reviewing the text below.\n\n";
-        }
-
-        message += "Recognized text:\n" + text;
-
-        setStatus(message);
-      })
-      .catch(function (error) {
-        setStatus(
-          "Photo scanning failed: " +
-          error.message +
-          "\nPlease enter the inventory data manually."
-        );
       });
+    }).then(function (result) {
+      var text = result && result.data && result.data.text
+        ? result.data.text.trim()
+        : "";
+
+      if (!text) {
+        setStatus(
+          "No readable text was found. Try a clearer photo or type the line manually."
+        );
+        return;
+      }
+
+      var found = [];
+
+      text.split(/\r?\n/).forEach(function (line) {
+        var item = parseBulkLine(line);
+
+        if (item) {
+          found.push(
+            item.code + " - " +
+            item.language + " - " +
+            item.quantity
+          );
+        }
+      });
+
+      var area = document.getElementById("bulk-notepad");
+
+      if (area && found.length) {
+        area.value +=
+          (area.value.trim() ? "\n" : "") +
+          found.join("\n");
+      }
+
+      setStatus(
+        (found.length
+          ? "Added " + found.length +
+            " detected line(s) to the checklist. Review them and click Process List.\n\n"
+          : "No complete inventory line was detected. Review the text below and enter the line manually.\n\n"
+        ) + "OCR text:\n" + text
+      );
+    }).catch(function (error) {
+      setStatus(
+        "OCR unavailable: " + error.message +
+        "\nEnter the checklist manually instead."
+      );
+    }).then(function () {
+      button.disabled = false;
+    });
   }
 
-  // Download a file in the browser
   function downloadBlob(blob, filename) {
     var url = URL.createObjectURL(blob);
     var link = document.createElement("a");
@@ -431,33 +564,39 @@
     }, 2000);
   }
 
-  // CSV fallback if an Excel workbook template is unavailable
-  function exportCSV(month) {
-    var csvRows = [["Code", "Language", "Total"]];
+  // CSV backup when Excel export is unavailable.
+  function downloadCSV(month) {
+    var rows = [
+      ["Code", "Category", "Language", "Quantity"]
+    ];
 
     Object.keys(inventory).sort().forEach(function (key) {
-      var separator = key.indexOf(":");
-      var language = key.substring(0, separator);
-      var code = key.substring(separator + 1);
+      var splitAt = key.indexOf(":");
+      var language = splitAt >= 0 ? key.slice(0, splitAt) : "";
+      var code = splitAt >= 0 ? key.slice(splitAt + 1) : key;
 
-      csvRows.push([code, language, inventory[key]]);
+      rows.push([
+        code,
+        getCategory(code),
+        language,
+        Number(inventory[key]) || 0
+      ]);
     });
 
-    var csv = csvRows.map(function (row) {
+    var csv = "\uFEFF" + rows.map(function (row) {
       return row.map(function (value) {
-        return '"' + String(value).replace(/"/g, '""') + '"';
+        return '"' + String(value == null ? "" : value)
+          .replace(/"/g, '""') + '"';
       }).join(",");
     }).join("\r\n");
 
     downloadBlob(
-      new Blob(["\uFEFF" + csv], {
-        type: "text/csv;charset=utf-8;"
-      }),
+      new Blob([csv], { type: "text/csv;charset=utf-8;" }),
       month + "-Inventory.csv"
     );
   }
 
-  function decodeXML(value) {
+  function decodeXml(value) {
     return String(value || "")
       .replace(/&lt;/g, "<")
       .replace(/&gt;/g, ">")
@@ -466,122 +605,388 @@
       .replace(/&amp;/g, "&");
   }
 
-  // Read Excel shared strings, including rich-text cells
-  function parseSharedStrings(xml) {
-    var parser = new DOMParser();
-    var doc = parser.parseFromString(xml, "application/xml");
-    var items = doc.getElementsByTagName("si");
-    var strings = [];
+  function getSharedStrings(zip) {
+    var file = zip.file("xl/sharedStrings.xml");
 
-    for (var i = 0; i < items.length; i++) {
-      var textNodes = items[i].getElementsByTagName("t");
-      var value = "";
-
-      for (var j = 0; j < textNodes.length; j++) {
-        value += textNodes[j].textContent || "";
-      }
-
-      strings.push(value);
+    if (!file) {
+      return Promise.resolve([]);
     }
 
-    return strings;
-  }
+    return file.async("string").then(function (xml) {
+      var doc = new DOMParser().parseFromString(
+        xml,
+        "application/xml"
+      );
 
-  // Read the visible value of an Excel cell
-  function getCellText(cellXML, sharedStrings) {
-    var typeMatch = cellXML.match(/\bt="([^"]+)"/);
-    var type = typeMatch ? typeMatch[1] : "";
+      var items = doc.getElementsByTagName("si");
+      var strings = [];
 
-    var valueMatch = cellXML.match(
-      /<v\b[^>]*>([\s\S]*?)<\/v>/
-    );
+      for (var i = 0; i < items.length; i++) {
+        var textNodes = items[i].getElementsByTagName("t");
+        var text = "";
 
-    if (type === "s" && valueMatch) {
-      var index = parseInt(valueMatch[1], 10);
-
-      return sharedStrings[index] || "";
-    }
-
-    var textRegex = /<t\b[^>]*>([\s\S]*?)<\/t>/g;
-    var textMatch;
-    var text = "";
-
-    while ((textMatch = textRegex.exec(cellXML)) !== null) {
-      text += decodeXML(textMatch[1]);
-    }
-
-    if (text) {
-      return text;
-    }
-
-    return valueMatch ? decodeXML(valueMatch[1]) : "";
-  }
-
-  // Replace a quantity cell while preserving its style
-  function replaceQuantityCell(rowXML, rowNumber, quantity) {
-    var found = false;
-
-    var updatedRow = rowXML.replace(
-      /<c\b([^>]*)>([\s\S]*?)<\/c>/g,
-      function (cellXML, attributes) {
-        var referenceMatch = attributes.match(/\br="([^"]+)"/);
-
-        if (
-          !referenceMatch ||
-          referenceMatch[1] !== "B" + rowNumber
-        ) {
-          return cellXML;
+        for (var j = 0; j < textNodes.length; j++) {
+          text += textNodes[j].textContent || "";
         }
 
-        found = true;
+        strings.push(text);
+      }
 
-        var cleanAttributes = attributes.replace(
-          /\s+t="[^"]*"/g,
-          ""
-        );
+      return strings;
+    });
+  }
 
-        return (
-          "<c" + cleanAttributes + ' t="n">' +
-          "<v>" + quantity + "</v>" +
-          "</c>"
-        );
+  function cellText(cell, sharedStrings) {
+    if (!cell) {
+      return "";
+    }
+
+    var type = cell.getAttribute("t") || "";
+
+    if (type === "s") {
+      var sharedValue = cell.getElementsByTagName("v")[0];
+
+      return sharedValue
+        ? (sharedStrings[Number(sharedValue.textContent)] || "")
+        : "";
+    }
+
+    if (type === "inlineStr") {
+      var textNodes = cell.getElementsByTagName("t");
+      var inlineText = "";
+
+      for (var i = 0; i < textNodes.length; i++) {
+        inlineText += textNodes[i].textContent || "";
+      }
+
+      return inlineText;
+    }
+
+    var value = cell.getElementsByTagName("v")[0];
+
+    return value ? decodeXml(value.textContent) : "";
+  }
+
+  function rowCells(row) {
+    return Array.prototype.slice.call(
+      row.getElementsByTagName("c")
+    );
+  }
+
+  function findColumnCell(row, column) {
+    var cells = rowCells(row);
+
+    for (var i = 0; i < cells.length; i++) {
+      if (
+        (cells[i].getAttribute("r") || "").match(
+          new RegExp("^" + column + "\\d+$")
+        )
+      ) {
+        return cells[i];
+      }
+    }
+
+    return null;
+  }
+
+  function rowLabel(row, sharedStrings) {
+    return cellText(
+      findColumnCell(row, "A"),
+      sharedStrings
+    ).trim();
+  }
+
+  // Find where new codes belong in the workbook's category sections.
+  function findInsertionIndex(labels, category) {
+    var names = publicationCategories.map(function (item) {
+      return item.value.toLowerCase();
+    });
+
+    var desired = String(category || "Books").toLowerCase();
+    var header = -1;
+
+    // Start at index 1 because row 1 is the column heading.
+    for (var i = 1; i < labels.length; i++) {
+      if (labels[i].toLowerCase() === desired) {
+        header = i;
+        break;
+      }
+    }
+
+    if (header < 0) {
+      return labels.length;
+    }
+
+    var nextSection = labels.length;
+
+    for (var j = header + 1; j < labels.length; j++) {
+      if (names.indexOf(labels[j].toLowerCase()) !== -1) {
+        nextSection = j;
+        break;
+      }
+    }
+
+    for (var k = header + 1; k < nextSection; k++) {
+      if (labels[k].toLowerCase() === "others") {
+        return k;
+      }
+    }
+
+    // Forms and Supplies has no Others row, so insert before Tracts.
+    // Public Magazines is the last section, so new rows are appended.
+    return nextSection;
+  }
+
+  // Build a styled row for a new publication in Excel.
+  function makeCustomRow(doc, rowNumber, code) {
+    var ns = doc.documentElement.namespaceURI ||
+      "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+    var row = doc.createElementNS(ns, "row");
+
+    row.setAttribute("r", String(rowNumber));
+    row.setAttribute("ht", "18");
+    row.setAttribute("customHeight", "1");
+
+    var a = doc.createElementNS(ns, "c");
+    a.setAttribute("r", "A" + rowNumber);
+    a.setAttribute("s", "5");
+    a.setAttribute("t", "inlineStr");
+
+    var inlineString = doc.createElementNS(ns, "is");
+    var textNode = doc.createElementNS(ns, "t");
+
+    textNode.textContent = "(" + code + ")";
+
+    inlineString.appendChild(textNode);
+    a.appendChild(inlineString);
+
+    var b = doc.createElementNS(ns, "c");
+    b.setAttribute("r", "B" + rowNumber);
+    b.setAttribute("s", "6");
+    b.setAttribute("t", "n");
+
+    var value = doc.createElementNS(ns, "v");
+    value.textContent = "0";
+
+    b.appendChild(value);
+    row.appendChild(a);
+    row.appendChild(b);
+
+    return row;
+  }
+
+  function renumberRow(row, rowNumber) {
+    row.setAttribute("r", String(rowNumber));
+
+    var cells = rowCells(row);
+
+    cells.forEach(function (cell) {
+      var ref = cell.getAttribute("r") || "";
+      var match = ref.match(/^([A-Z]+)\d+$/);
+
+      if (match) {
+        cell.setAttribute("r", match[1] + rowNumber);
+      }
+    });
+  }
+
+  function setNumericCell(row, rowNumber, quantity, doc) {
+    var cell = findColumnCell(row, "B");
+    var ns = doc.documentElement.namespaceURI ||
+      "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+    if (!cell) {
+      cell = doc.createElementNS(ns, "c");
+      cell.setAttribute("r", "B" + rowNumber);
+      cell.setAttribute("s", "6");
+      row.appendChild(cell);
+    }
+
+    cell.setAttribute("t", "n");
+
+    while (cell.firstChild) {
+      cell.removeChild(cell.firstChild);
+    }
+
+    var value = doc.createElementNS(ns, "v");
+    value.textContent = String(Number(quantity) || 0);
+
+    cell.appendChild(value);
+  }
+
+  // Add custom codes to their category sections and update quantities.
+  function updateWorksheet(xml, language, sharedStrings) {
+    var doc = new DOMParser().parseFromString(
+      xml,
+      "application/xml"
+    );
+
+    if (doc.getElementsByTagName("parsererror").length) {
+      throw new Error("The workbook contains invalid worksheet XML.");
+    }
+
+    var sheetData = doc.getElementsByTagName("sheetData")[0];
+
+    if (!sheetData) {
+      return xml;
+    }
+
+    var originalRows = Array.prototype.filter.call(
+      sheetData.childNodes,
+      function (node) {
+        return node.nodeType === 1 &&
+          (node.localName || node.nodeName) === "row";
       }
     );
 
-    if (!found) {
-      updatedRow = updatedRow.replace(
-        /<\/row>\s*$/,
-        '<c r="B' + rowNumber + '" t="n"><v>' +
-        quantity +
-        "</v></c></row>"
-      );
+    var labels = originalRows.map(function (row) {
+      return rowLabel(row, sharedStrings);
+    });
+
+    var existingCodes = Object.create(null);
+
+    labels.forEach(function (label) {
+      var match = label.match(/\(([^)]+)\)/);
+
+      if (match) {
+        existingCodes[normCode(match[1])] = true;
+      }
+    });
+
+    var insertions = Object.create(null);
+
+    Object.keys(customPublications).sort().forEach(function (code) {
+      if (existingCodes[code]) {
+        return;
+      }
+
+      var category = customPublications[code];
+
+      if (!publicationCategories.some(function (item) {
+        return item.value === category;
+      })) {
+        category = "Books";
+      }
+
+      var index = findInsertionIndex(labels, category);
+
+      if (!insertions[index]) {
+        insertions[index] = [];
+      }
+
+      insertions[index].push(code);
+    });
+
+    var planned = [];
+
+    for (var i = 0; i <= originalRows.length; i++) {
+      (insertions[i] || []).sort().forEach(function (code) {
+        planned.push({ custom: code });
+      });
+
+      if (i < originalRows.length) {
+        planned.push({ node: originalRows[i] });
+      }
     }
 
-    return updatedRow;
+    // Rebuild the worksheet rows and update their cell references.
+    originalRows.forEach(function (row) {
+      sheetData.removeChild(row);
+    });
+
+    planned.forEach(function (item, index) {
+      var rowNumber = index + 1;
+      var row = item.custom
+        ? makeCustomRow(doc, rowNumber, item.custom)
+        : item.node;
+
+      if (!item.custom) {
+        renumberRow(row, rowNumber);
+      }
+
+      sheetData.appendChild(row);
+    });
+
+    var dimension = doc.getElementsByTagName("dimension")[0];
+
+    if (dimension) {
+      dimension.setAttribute("ref", "A1:B" + planned.length);
+    }
+
+    // Write each item's quantity to column B.
+    var finalRows = Array.prototype.filter.call(
+      sheetData.childNodes,
+      function (node) {
+        return node.nodeType === 1 &&
+          (node.localName || node.nodeName) === "row";
+      }
+    );
+
+    finalRows.forEach(function (row, index) {
+      var rowNumber = Number(
+        row.getAttribute("r") || (index + 1)
+      );
+
+      var label = rowLabel(row, sharedStrings);
+      var match = label.match(/\(([^)]+)\)/);
+
+      if (!match) {
+        return;
+      }
+
+      var code = normCode(match[1]);
+
+      if (!isCodeValid(code)) {
+        return;
+      }
+
+      var quantity = inventory[language + ":" + code] || 0;
+
+      setNumericCell(row, rowNumber, quantity, doc);
+    });
+
+    return new XMLSerializer().serializeToString(doc);
   }
 
-  // Update quantities on the template workbook's worksheets
-  function updateWorkbook(zip) {
-    var sharedFile = zip.file("xl/sharedStrings.xml");
+  // Always use September-Inventory.xlsx as the template.
+  // The selected month determines the downloaded filename.
+  function exportExcel() {
+    var monthSelect = document.getElementById("report-month");
+    var button = document.getElementById("export");
 
-    var stringsPromise = sharedFile
-      ? sharedFile.async("string").then(parseSharedStrings)
-      : Promise.resolve([]);
+    selectedMonth = monthSelect
+      ? monthSelect.value
+      : selectedMonth;
 
-    var sheets = [
-      {
-        path: "xl/worksheets/sheet1.xml",
-        language: "TG"
-      },
-      {
-        path: "xl/worksheets/sheet2.xml",
-        language: "E"
-      }
-    ];
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Preparing download...";
+    }
 
-    return stringsPromise.then(function (sharedStrings) {
-      return Promise.all(
-        sheets.map(function (sheet) {
+    loadJSZip().then(function (JSZip) {
+      return fetch(
+        "./September-Inventory.xlsx?cacheBust=" + Date.now(),
+        { cache: "no-store" }
+      ).then(function (response) {
+        if (!response.ok) {
+          throw new Error(
+            "September-Inventory.xlsx was not found beside index.html."
+          );
+        }
+
+        return response.arrayBuffer();
+      }).then(function (buffer) {
+        return JSZip.loadAsync(buffer);
+      });
+    }).then(function (zip) {
+      return getSharedStrings(zip).then(function (sharedStrings) {
+        var sheets = [
+          { path: "xl/worksheets/sheet1.xml", lang: "TG" },
+          { path: "xl/worksheets/sheet2.xml", lang: "E" }
+        ];
+
+        return Promise.all(sheets.map(function (sheet) {
           var file = zip.file(sheet.path);
 
           if (!file) {
@@ -589,549 +994,194 @@
           }
 
           return file.async("string").then(function (xml) {
-            var updatedXML = xml.replace(
-              /<row\b[^>]*>[\s\S]*?<\/row>/g,
-              function (rowXML) {
-                var cellA = rowXML.match(
-                  /<c\b([^>]*\br="A(\d+)"[^>]*)>[\s\S]*?<\/c>/
-                );
-
-                if (!cellA) {
-                  return rowXML;
-                }
-
-                var rowNumber = cellA[2];
-                var cellText = getCellText(
-                  cellA[0],
-                  sharedStrings
-                );
-
-                var codeMatch = cellText.match(/\(([^)]+)\)/);
-
-                var code = normalizeCode(
-                  codeMatch ? codeMatch[1] : cellText
-                );
-
-                // Avoid changing headings and unrelated rows
-                if (!code || !isCodeValid(code)) {
-                  return rowXML;
-                }
-
-                var key = sheet.language + ":" + code;
-                var quantity = Number(inventory[key]) || 0;
-
-                return replaceQuantityCell(
-                  rowXML,
-                  rowNumber,
-                  quantity
-                );
-              }
+            zip.file(
+              sheet.path,
+              updateWorksheet(xml, sheet.lang, sharedStrings)
             );
-
-            zip.file(sheet.path, updatedXML);
           });
-        })
+        })).then(function () {
+          return zip;
+        });
+      });
+    }).then(function (zip) {
+      return zip.generateAsync({
+        type: "blob",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+    }).then(function (blob) {
+      downloadBlob(
+        blob,
+        selectedMonth + "-Inventory.xlsx"
       );
+
+      setStatus(
+        "Downloaded " + selectedMonth +
+        "-Inventory.xlsx with current inventory quantities."
+      );
+    }).catch(function (error) {
+      console.warn("Excel export failed; downloading CSV instead.", error);
+
+      downloadCSV(selectedMonth);
+
+      setStatus(
+        "The formatted workbook could not be created. A CSV backup was downloaded. Check that September-Inventory.xlsx is in the published repository."
+      );
+    }).then(function () {
+      if (button) {
+        button.disabled = false;
+        button.textContent = "Download Excel";
+      }
     });
   }
 
-  // Export an Excel workbook using the existing template
-  function exportExcel() {
-    var button = document.getElementById("export");
-    var monthSelect = document.getElementById("report-month");
-
-    if (monthSelect) {
-      selectedMonth = monthSelect.value;
-    }
-
-    if (!button) {
-      return;
-    }
-
-    button.disabled = true;
-    button.textContent = "Generating Workbook...";
-
-    var templateName = "September-Inventory.xlsx";
-
-    fetch(templateName + "?cache=" + Date.now(), {
-      cache: "no-store"
-    })
-      .then(function (response) {
-        if (!response.ok) {
-          throw new Error(
-            "Template workbook not found: " + templateName
-          );
-        }
-
-        return response.arrayBuffer();
-      })
-      .then(function (buffer) {
-        return loadLibrary(
-          "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
-          "JSZip"
-        ).then(function (JSZip) {
-          return JSZip.loadAsync(buffer);
-        });
-      })
-      .then(function (zip) {
-        return updateWorkbook(zip).then(function () {
-          return zip.generateAsync({
-            type: "blob"
-          });
-        });
-      })
-      .then(function (blob) {
-        downloadBlob(
-          blob,
-          selectedMonth + "-Inventory.xlsx"
-        );
-
-        setStatus("Excel workbook downloaded successfully.");
-      })
-      .catch(function (error) {
-        // A CSV remains available if the template or library is missing
-        exportCSV(selectedMonth);
-
-        setStatus(
-          "The Excel template could not be loaded. " +
-          "A CSV file was downloaded instead. " +
-          "To export XLSX, make sure " +
-          selectedMonth +
-          "-Inventory.xlsx is in your repository beside index.html."
-        );
-      })
-      .then(function () {
-        button.disabled = false;
-        button.textContent = "Download Excel";
-      });
-  }
-
-  // Build the page and render inventory data
+  // Render the interface.
   function render() {
+    var app = document.getElementById("app");
+
     if (!app) {
       return;
     }
 
-    var keys = Object.keys(inventory).sort();
-    var totalQuantity = 0;
-
-    keys.forEach(function (key) {
-      totalQuantity += Number(inventory[key]) || 0;
-    });
-
-    var rows = keys.map(function (key) {
-      var separator = key.indexOf(":");
-      var language = key.substring(0, separator);
-      var code = key.substring(separator + 1);
-      var valid = isCodeValid(code);
-
-      return (
-        '<tr class="' + (valid ? "" : "invalid-row") + '">' +
-          "<td>" + escapeHTML(code) +
-            (valid ? "" : ' <span class="warning">Invalid code</span>') +
-          "</td>" +
-          "<td>" + escapeHTML(language) + "</td>" +
-          "<td class=\"quantity\">" +
-            escapeHTML(inventory[key]) +
-          "</td>" +
-          '<td><button type="button" class="delete-btn" data-delete="' +
-            escapeHTML(key) +
-          '">Delete</button></td>' +
-        "</tr>"
-      );
-    }).join("");
-
-    if (!rows) {
-      rows = '<tr><td colspan="4" class="empty">No inventory entries yet.</td></tr>';
-    }
-
-    var historyHTML = history.map(function (item, index) {
-      var valid = isCodeValid(item.code);
-
-      return (
-        '<div class="history-item ' +
-          (valid ? "" : "invalid-history") +
-        '">' +
-          "<span>" + (index + 1) + ".</span> " +
-          escapeHTML(item.code) + " - " +
-          escapeHTML(item.language) + " — " +
-          escapeHTML(item.quantity) +
-        "</div>"
-      );
-    }).join("");
-
-    if (!historyHTML) {
-      historyHTML = '<p class="empty">No history available.</p>';
-    }
+    var months = [
+      "January", "February", "March", "April",
+      "May", "June", "July", "August",
+      "September", "October", "November", "December"
+    ];
 
     var monthOptions = months.map(function (month) {
-      return (
-        '<option value="' + month + '"' +
-          (month === selectedMonth ? " selected" : "") +
-        ">" + month + "</option>"
-      );
+      return '<option value="' + month + '"' +
+        (month === selectedMonth ? " selected" : "") +
+        ">" + month + "</option>";
     }).join("");
 
-    app.innerHTML = `
-      <style>
-        #app {
-          font-family: Arial, Helvetica, sans-serif;
-          color: #202938;
-          line-height: 1.5;
-        }
+    var categoryOptions = publicationCategories.map(function (item) {
+      return '<option value="' + escapeHtml(item.value) + '">' +
+        escapeHtml(item.label) + "</option>";
+    }).join("");
 
-        #app * {
-          box-sizing: border-box;
-        }
+    var customRows = Object.keys(customPublications).sort().map(function (code) {
+      return "<tr><td>" + escapeHtml(code) +
+        "</td><td>" + escapeHtml(categoryLabel(customPublications[code])) +
+        '</td><td><button type="button" class="inv-btn danger" data-remove-code="' +
+        escapeHtml(code) + '">Remove</button></td></tr>';
+    }).join("");
 
-        .inventory-app {
-          max-width: 1050px;
-          margin: 24px auto;
-          padding: 24px;
-          background: #ffffff;
-          border: 1px solid #e1e6ee;
-          border-radius: 14px;
-          box-shadow: 0 5px 22px rgba(20, 32, 50, 0.07);
-        }
+    if (!customRows) {
+      customRows =
+        '<tr><td colspan="3" class="inv-muted">No custom publication codes added yet.</td></tr>';
+    }
 
-        .inventory-app h1 {
-          margin: 0 0 6px;
-          font-size: 28px;
-          color: #18253b;
-        }
+    var keys = Object.keys(inventory).sort();
 
-        .subtitle {
-          color: #637087;
-          margin: 0 0 24px;
-        }
+    var inventoryRows = keys.map(function (key) {
+      var separator = key.indexOf(":");
+      var language = separator >= 0 ? key.slice(0, separator) : "";
+      var code = separator >= 0 ? key.slice(separator + 1) : key;
+      var valid = isCodeValid(code);
 
-        .panel {
-          border: 1px solid #e1e6ee;
-          border-radius: 10px;
-          padding: 18px;
-          margin-bottom: 18px;
-          min-width: 0;
-        }
+      var invalidClass = valid ? "" : ' class="invalid-code"';
+      var badge = valid
+        ? ""
+        : '<span class="inv-badge">Invalid code</span>';
 
-        .panel h2 {
-          margin: 0 0 12px;
-          font-size: 18px;
-        }
+      return "<tr" + invalidClass +
+        "><td>" + escapeHtml(code) + badge +
+        "</td><td>" + escapeHtml(getCategory(code)) +
+        "</td><td>" + escapeHtml(language) +
+        "</td><td>" + escapeHtml(inventory[key]) +
+        '</td><td><button type="button" class="inv-btn danger" data-delete="' +
+        escapeHtml(key) + '">Delete</button></td></tr>';
+    }).join("");
 
-        #bulk-notepad {
-          width: 100%;
-          min-height: 180px;
-          resize: vertical;
-          padding: 12px;
-          border: 1px solid #cbd5e1;
-          border-radius: 8px;
-          font: 14px/1.6 Consolas, monospace;
-          background: #fbfcfe;
-        }
+    var historyRows = history.map(function (item, index) {
+      return '<div' +
+        (isCodeValid(item.code)
+          ? ""
+          : ' style="color:#b42318;font-weight:bold"') +
+        ">" + (index + 1) + ". " +
+        escapeHtml(item.code) + " - " +
+        escapeHtml(item.language) + " — " +
+        escapeHtml(item.quantity) + "</div>";
+    }).join("");
 
-        .help {
-          margin: 8px 0 14px;
-          font-size: 13px;
-          color: #64748b;
-        }
+    var total = keys.reduce(function (sum, key) {
+      return sum + (Number(inventory[key]) || 0);
+    }, 0);
 
-        .button-row {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 9px;
-          align-items: center;
-        }
+    app.innerHTML = [
+      '<section class="inv-card">',
+      '<h1 class="inv-title">Inventory Scanner</h1>',
+      '<div class="inv-muted">Paste your entire notepad checklist here. Math symbols (+) are calculated automatically.</div>',
+      '<textarea id="bulk-notepad" placeholder="Example:\nnwt - TG - 1500 + 375 + 2125\nbhs - E - 25 + 10\nS-4 - TG - 5"></textarea>',
+      '<div class="inv-controls">',
+      '<button type="button" class="inv-btn" id="add-bulk">Process List</button>',
+      '<button type="button" class="inv-btn secondary" id="clear-text">Clear text</button>',
+      '</div></section>',
 
-        .inventory-app button {
-          border: 0;
-          border-radius: 7px;
-          padding: 10px 15px;
-          background: #245bd6;
-          color: #fff;
-          font-size: 14px;
-          font-weight: 600;
-          cursor: pointer;
-        }
+      '<section class="inv-card">',
+      '<h2>Manage Publication Codes</h2>',
+      '<p class="inv-muted">Register new publications and choose their category. Codes are saved in this browser and added to the matching section of Excel exports.</p>',
+      '<form id="publication-form">',
+      '<div class="publication-fields">',
+      '<label for="new-code">Publication code<input id="new-code" type="text" maxlength="40" placeholder="e.g. newbook1" autocomplete="off" required></label>',
+      '<label for="new-category">Category<select id="new-category">' + categoryOptions + '</select></label>',
+      '<button type="submit" class="inv-btn">Add / Update Code</button>',
+      '</div></form>',
+      '<div class="inv-table-wrap"><table>',
+      '<thead><tr><th>Custom code</th><th>Category</th><th>Action</th></tr></thead>',
+      '<tbody>' + customRows + '</tbody></table></div></section>',
 
-        .inventory-app button:hover {
-          filter: brightness(0.94);
-        }
+      '<section class="inv-card"><h2>Read code from photo</h2>',
+      '<div class="inv-controls"><label for="photo">Choose a photo:</label>',
+      '<input id="photo" type="file" accept="image/*">',
+      '<button type="button" class="inv-btn secondary" id="read">Read Photo</button></div>',
+      '<img id="preview" alt="Selected photo preview">',
+      '<div id="status" aria-live="polite">Ready.</div></section>',
 
-        .inventory-app button:disabled {
-          opacity: 0.6;
-          cursor: wait;
-        }
+      '<section class="inv-card"><h2>Counts Reporting</h2>',
+      '<div class="inv-controls"><label for="report-month">Month:</label>',
+      '<select id="report-month">' + monthOptions + '</select>',
+      '<button type="button" class="inv-btn" id="export">Download Excel</button>',
+      '<button type="button" class="inv-btn danger" id="clear">Clear entries</button></div>',
+      '<p><strong>Running total:</strong> ' + total.toLocaleString() + '</p>',
+      '<div class="inv-table-wrap"><table>',
+      '<thead><tr><th>Code</th><th>Category</th><th>Language</th><th>Total</th><th>Action</th></tr></thead>',
+      '<tbody>' + (inventoryRows ||
+        '<tr><td colspan="5">No inventory entries yet.</td></tr>') +
+      '</tbody></table></div></section>',
 
-        .inventory-app .secondary-btn {
-          background: #e9eef6;
-          color: #26344a;
-        }
-
-        .inventory-app .danger-btn,
-        .inventory-app .delete-btn {
-          background: #c83b43;
-          color: #fff;
-        }
-
-        .inventory-app .delete-btn {
-          padding: 6px 10px;
-          font-size: 12px;
-        }
-
-        .stats {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 12px;
-          margin-bottom: 18px;
-        }
-
-        .stat-card {
-          padding: 16px;
-          border: 1px solid #e1e6ee;
-          border-radius: 10px;
-          background: #f8faff;
-        }
-
-        .stat-label {
-          display: block;
-          color: #68768c;
-          font-size: 13px;
-        }
-
-        .stat-value {
-          display: block;
-          font-size: 26px;
-          font-weight: 700;
-          margin-top: 4px;
-        }
-
-        .month-select {
-          padding: 9px 12px;
-          border: 1px solid #cbd5e1;
-          border-radius: 7px;
-          background: white;
-          color: #202938;
-          font-size: 14px;
-        }
-
-        .table-wrap {
-          width: 100%;
-          overflow-x: auto;
-        }
-
-        .inventory-table {
-          width: 100%;
-          border-collapse: collapse;
-          margin-top: 10px;
-          font-size: 14px;
-        }
-
-        .inventory-table th,
-        .inventory-table td {
-          padding: 11px 10px;
-          text-align: left;
-          border-bottom: 1px solid #e5eaf1;
-        }
-
-        .inventory-table th {
-          background: #f1f5fb;
-          font-weight: 700;
-        }
-
-        .inventory-table .quantity {
-          font-weight: 700;
-          font-variant-numeric: tabular-nums;
-        }
-
-        .invalid-row {
-          background: #fff4f4;
-          color: #a42a31;
-        }
-
-        .warning {
-          display: inline-block;
-          background: #c83b43;
-          color: white;
-          font-size: 10px;
-          padding: 2px 5px;
-          border-radius: 4px;
-        }
-
-        .empty {
-          color: #7c8799;
-          text-align: center;
-          padding: 18px;
-        }
-
-        #status {
-          margin-top: 14px;
-          padding: 12px;
-          border-radius: 7px;
-          background: #f1f5fb;
-          color: #36465f;
-          white-space: pre-wrap;
-          overflow-wrap: anywhere;
-          font-size: 13px;
-        }
-
-        #preview {
-          display: none;
-          max-width: 100%;
-          max-height: 280px;
-          margin-top: 12px;
-          border: 1px solid #d8dee9;
-          border-radius: 8px;
-          object-fit: contain;
-        }
-
-        .history-list {
-          max-height: 280px;
-          overflow-y: auto;
-        }
-
-        .history-item {
-          padding: 8px 10px;
-          border-bottom: 1px solid #edf0f5;
-          overflow-wrap: anywhere;
-        }
-
-        .invalid-history {
-          color: #b42f37;
-        }
-
-        @media (max-width: 600px) {
-          .inventory-app {
-            margin: 8px;
-            padding: 14px;
-          }
-
-          .inventory-app h1 {
-            font-size: 23px;
-          }
-
-          .stats {
-            grid-template-columns: 1fr;
-          }
-
-          .panel {
-            padding: 12px;
-          }
-        }
-      </style>
-
-      <main class="inventory-app">
-        <h1>Inventory Scanner</h1>
-        <p class="subtitle">
-          Track publication inventory, calculate quantities, scan photos,
-          and create monthly reports.
-        </p>
-
-        <section class="panel">
-          <h2>Paste your checklist</h2>
-
-          <textarea
-            id="bulk-notepad"
-            placeholder="Enter one item per line, for example:
-nwt-TG-1500 + 375 + 2125
-bhs-E-100 + 50
-S-4-TG-25"
-          ></textarea>
-
-          <p class="help">
-            Format: CODE-LANGUAGE-QUANTITY.
-            Use TG or E for the language.
-            Math expressions using + are calculated automatically.
-          </p>
-
-          <div class="button-row">
-            <button id="add-bulk" type="button">Process List</button>
-            <button id="clear" class="danger-btn" type="button">
-              Clear Entries
-            </button>
-          </div>
-        </section>
-
-        <section class="panel">
-          <h2>Read code from photo</h2>
-
-          <div class="button-row">
-            <input id="photo" type="file" accept="image/*">
-            <button id="read" class="secondary-btn" type="button">
-              Scan Photo
-            </button>
-          </div>
-
-          <img id="preview" alt="Selected photo preview">
-
-          <div id="status" role="status" aria-live="polite">
-            Select a photo to scan, or enter your checklist manually.
-          </div>
-        </section>
-
-        <div class="stats">
-          <div class="stat-card">
-            <span class="stat-label">Inventory entries</span>
-            <span class="stat-value">${keys.length}</span>
-          </div>
-
-          <div class="stat-card">
-            <span class="stat-label">Running total</span>
-            <span class="stat-value">${totalQuantity.toLocaleString()}</span>
-          </div>
-        </div>
-
-        <section class="panel">
-          <h2>Monthly reporting</h2>
-
-          <div class="button-row">
-            <label for="report-month">Report month:</label>
-
-            <select id="report-month" class="month-select">
-              ${monthOptions}
-            </select>
-
-            <button id="export" type="button">Download Excel</button>
-          </div>
-
-          <p class="help">
-            Excel export uses your existing monthly workbook template.
-            A CSV file is downloaded if the template is unavailable.
-          </p>
-        </section>
-
-        <section class="panel">
-          <h2>Running totals</h2>
-
-          <div class="table-wrap">
-            <table class="inventory-table">
-              <thead>
-                <tr>
-                  <th>Code</th>
-                  <th>Language</th>
-                  <th>Total</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-
-              <tbody id="inventory-body">
-                ${rows}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="panel">
-          <h2>Inventory history</h2>
-          <div class="history-list" id="history-list">
-            ${historyHTML}
-          </div>
-        </section>
-      </main>
-    `;
+      '<section class="inv-card"><h2>History</h2><div class="inv-history">' +
+        (historyRows || '<div class="inv-muted">No history yet.</div>') +
+      '</div></section>'
+    ].join("");
 
     document.getElementById("add-bulk").addEventListener(
       "click",
       processBulkInput
+    );
+
+    document.getElementById("clear-text").addEventListener(
+      "click",
+      function () {
+        document.getElementById("bulk-notepad").value = "";
+        setStatus("Checklist text cleared.");
+      }
+    );
+
+    document.getElementById("publication-form").addEventListener(
+      "submit",
+      addPublicationCode
+    );
+
+    Array.prototype.forEach.call(
+      app.querySelectorAll("[data-remove-code]"),
+      function (button) {
+        button.addEventListener("click", function () {
+          removePublicationCode(
+            button.getAttribute("data-remove-code")
+          );
+        });
+      }
     );
 
     document.getElementById("read").addEventListener(
@@ -1157,31 +1207,31 @@ S-4-TG-25"
     );
 
     Array.prototype.forEach.call(
-      document.querySelectorAll("[data-delete]"),
+      app.querySelectorAll("[data-delete]"),
       function (button) {
         button.addEventListener("click", function () {
-          remove(button.getAttribute("data-delete"));
+          removeInventory(button.getAttribute("data-delete"));
         });
       }
     );
   }
 
-  // Start only after the page is ready
-  function start() {
-    app = document.getElementById("app");
+  function init() {
+    var app = document.getElementById("app");
 
     if (!app) {
-      app = document.createElement("div");
+      app = document.createElement("main");
       app.id = "app";
       document.body.appendChild(app);
     }
 
+    addStyles();
     render();
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", start);
+    document.addEventListener("DOMContentLoaded", init);
   } else {
-    start();
+    init();
   }
 })();
