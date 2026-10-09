@@ -94,78 +94,56 @@
       return r.arrayBuffer();
     }).then(JSZip.loadAsync).then(function(zip){
       var sheets = [["xl/worksheets/sheet1.xml", "TG"], ["xl/worksheets/sheet2.xml", "E"]];
-      var sFile = zip.file("xl/sharedStrings.xml");
-      
-      if (!sFile) {
-        throw Error("This fix requires a workbook that uses shared strings. Your file matches perfectly.");
-      }
+      var ns = "http://openxmlformats.org";
 
-      return sFile.async("string").then(function(sXml) {
-        var sDoc = new DOMParser().parseFromString(sXml, "application/xml");
-        var ns = "http://openxmlformats.org";
-        var sElements = sDoc.getElementsByTagNameNS(ns, "si");
-        var stringTable = [];
+      return Promise.all(sheets.map(function(sheetInfo){
+        var path = sheetInfo[0];
+        var lang = sheetInfo[1];
+        var f = zip.file(path);
+        if (!f) return Promise.resolve();
         
-        for (var i = 0; i < sElements.length; i++) {
-          var tEl = sElements[i].getElementsByTagNameNS(ns, "t")[0];
-          stringTable.push(tEl ? (tEl.textContent || "").trim() : "");
-        }
+        return f.async("string").then(function(xml){
+          var doc = new DOMParser().parseFromString(xml, "application/xml");
+          var cells = Array.prototype.slice.call(doc.getElementsByTagNameNS(ns, "c"));
+          var rowsMap = {};
 
-        return Promise.all(sheets.map(function(p){
-          var f = zip.file(p[0]);
-          if (!f) return Promise.resolve();
-          return f.async("string").then(function(xml){
-            var doc = new DOMParser().parseFromString(xml, "application/xml");
-            var cells = Array.prototype.slice.call(doc.getElementsByTagNameNS(ns, "c"));
-            var rowsMap = {};
-
-            cells.forEach(function(c) {
-              var ref = c.getAttribute("r") || "";
-              var col = ref.replace(/[0-9]/g, "");
-              var row = ref.replace(/[^0-9]/g, "");
-              if (!rowsMap[row]) rowsMap[row] = {};
-              rowsMap[row][col] = c;
-            });
-
-            Object.keys(rowsMap).forEach(function(row) {
-              var cellA = rowsMap[row]["A"];
-              var cellB = rowsMap[row]["B"];
-              if (!cellA || !cellB) return;
-
-              var code = null;
-              var tType = cellA.getAttribute("t");
-              
-              if (tType === "s") {
-                var vEl = cellA.getElementsByTagNameNS(ns, "v")[0];
-                if (vEl) {
-                  var strIndex = parseInt(vEl.textContent, 10);
-                  var text = stringTable[strIndex] || "";
-                  var m = text.match(/^\(([^)]+)\)/);
-                  if (m) code = m[1];
-                }
-              } else {
-                var rawText = cellA.textContent || "";
-                var mRaw = rawText.match(/^\(([^)]+)\)/);
-                if (mRaw) code = mRaw[1];
-              }
-
-              if (!code) return;
-              
-              var cleanExcelCode = normExcel(code);
-              var lookupKey = p[1] + ":" + normWeb(cleanExcelCode);
-              var finalQty = inventory[lookupKey] || 0;
-
-              while (cellB.firstChild) cellB.removeChild(cellB.firstChild);
-              cellB.setAttribute("t", "n");
-              var v = doc.createElementNS(ns, "v");
-              v.textContent = String(finalQty);
-              cellB.appendChild(v);
-            });
-
-            zip.file(p[0], new XMLSerializer().serializeToString(doc));
+          cells.forEach(function(c) {
+            var ref = c.getAttribute("r") || "";
+            var col = ref.replace(/[0-9]/g, "");
+            var row = ref.replace(/[^0-9]/g, "");
+            if (!rowsMap[row]) rowsMap[row] = {};
+            rowsMap[row][col] = c;
           });
-        }));
-      }).then(function(){ return zip; });
+
+          Object.keys(rowsMap).forEach(function(row) {
+            var cellA = rowsMap[row]["A"];
+            var cellB = rowsMap[row]["B"];
+            if (!cellA || !cellB) return;
+
+            var code = null;
+            var tEl = cellA.getElementsByTagNameNS(ns, "t")[0];
+            var vEl = cellA.getElementsByTagNameNS(ns, "v")[0];
+            var rawText = tEl ? tEl.textContent : (vEl ? vEl.textContent : (cellA.textContent || ""));
+            
+            var m = rawText.trim().match(/^\(([^)]+)\)/);
+            if (m) code = m[1];
+
+            if (!code) return;
+            
+            var cleanExcelCode = normExcel(code);
+            var lookupKey = lang + ":" + normWeb(cleanExcelCode);
+            var finalQty = inventory[lookupKey] || 0;
+
+            while (cellB.firstChild) cellB.removeChild(cellB.firstChild);
+            cellB.setAttribute("t", "n");
+            var v = doc.createElementNS(ns, "v");
+            v.textContent = String(finalQty);
+            cellB.appendChild(v);
+          });
+
+          zip.file(path, new XMLSerializer().serializeToString(doc));
+        });
+      })).then(function(){ return zip; });
     }).then(function(z){
       return z.generateAsync({ type: "blob" });
     }).then(function(b){
