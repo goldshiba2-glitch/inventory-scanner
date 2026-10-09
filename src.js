@@ -6,7 +6,10 @@
   var customPublications = {};
   var deletedPublications = {};
   var ocrPromise = null;
+  var workerPromise = null;
   var zipPromise = null;
+  var cameraStream = null;
+  var scanning = false;
   var selectedMonth = "September";
   var app = null;
 
@@ -20,29 +23,25 @@
   ];
 
   var validCodesMaster = [
-    "nwt", "nwtpkt", "bhs", "bt", "lfb", "lff", "rr", "scl",
-    "sjj", "sjjls", "sjjyls", "wcg", "yp1", "yp2", "fg", "hf",
-    "la", "lc", "lffi", "ll", "lmd", "mb", "rj", "wfg", "ypq",
-    "jwcd1", "jwcd9", "jwcd10", "S-4", "inv",
+    "nwt", "nwtpkt", "bhs", "bt", "lfb", "lff", "rr", "scl", "sjj", "sjjls",
+    "sjjyls", "wcg", "yp1", "yp2", "fg", "hf", "la", "lc", "lffi", "ll",
+    "lmd", "mb", "rj", "wfg", "ypq", "jwcd1", "jwcd9", "jwcd10", "S-4", "inv",
     "t30", "t31", "t32", "t33", "t34", "t35", "t36", "t37",
     "g18.1", "g18.2", "g18.3", "g19.1", "g19.2", "g19.3",
     "g20.1", "g20.2", "g20.3", "g21.1", "g21.2", "g21.3",
     "g22.1", "g23.1", "g24.1", "g25.1",
-    "wp18.1", "wp18.2", "wp18.3",
-    "wp19.1", "wp19.2", "wp19.3",
-    "wp20.1", "wp20.2", "wp20.3",
-    "wp21.1", "wp21.2", "wp21.3",
+    "wp18.1", "wp18.2", "wp18.3", "wp19.1", "wp19.2", "wp19.3",
+    "wp20.1", "wp20.2", "wp20.3", "wp21.1", "wp21.2", "wp21.3",
     "wp22.1", "wp23.1", "wp24.1", "wp25.1", "wp26.1"
   ];
 
   var validCodes = Object.create(null);
+  validCodesMaster.forEach(function (code) {
+    validCodes[normCode(code)] = true;
+  });
 
   function normCode(code) {
-    code = String(code || "")
-      .toLowerCase()
-      .trim()
-      .replace(/\s+/g, "");
-
+    code = String(code || "").toLowerCase().trim().replace(/\s+/g, "");
     code = code.replace(/^llf$/, "lff");
 
     if (/^t-?\d+$/.test(code)) {
@@ -52,9 +51,14 @@
     return code;
   }
 
-  validCodesMaster.forEach(function (code) {
-    validCodes[normCode(code)] = true;
-  });
+  function escapeHtml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
 
   function validCategory(category) {
     return publicationCategories.some(function (item) {
@@ -62,14 +66,10 @@
     });
   }
 
-  function normalizeCustomRegistry(saved) {
+  function normalizeCustom(saved) {
     var result = {};
 
-    if (
-      !saved ||
-      typeof saved !== "object" ||
-      Array.isArray(saved)
-    ) {
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) {
       return result;
     }
 
@@ -86,9 +86,7 @@
         };
       } else if (value && typeof value === "object") {
         result[code] = {
-          category: validCategory(value.category)
-            ? value.category
-            : "Books",
+          category: validCategory(value.category) ? value.category : "Books",
           active: value.active !== false
         };
       }
@@ -97,14 +95,10 @@
     return result;
   }
 
-  function normalizeDeletedRegistry(saved) {
+  function normalizeDeleted(saved) {
     var result = {};
 
-    if (
-      !saved ||
-      typeof saved !== "object" ||
-      Array.isArray(saved)
-    ) {
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) {
       return result;
     }
 
@@ -126,84 +120,55 @@
     return result;
   }
 
-  // Restore saved inventory, history, custom codes, and deletions.
   try {
-    var savedInventory = JSON.parse(
-      localStorage.getItem("inventory") || "{}"
-    );
+    var si = JSON.parse(localStorage.getItem("inventory") || "{}");
+    var sh = JSON.parse(localStorage.getItem("history") || "[]");
+    var sc = JSON.parse(localStorage.getItem("customPublications") || "{}");
+    var sd = JSON.parse(localStorage.getItem("deletedPublications") || "{}");
 
-    var savedHistory = JSON.parse(
-      localStorage.getItem("history") || "[]"
-    );
-
-    var savedCustom = JSON.parse(
-      localStorage.getItem("customPublications") || "{}"
-    );
-
-    var savedDeleted = JSON.parse(
-      localStorage.getItem("deletedPublications") || "{}"
-    );
-
-    if (
-      savedInventory &&
-      typeof savedInventory === "object" &&
-      !Array.isArray(savedInventory)
-    ) {
-      inventory = savedInventory;
+    if (si && typeof si === "object" && !Array.isArray(si)) {
+      inventory = si;
     }
 
-    if (Array.isArray(savedHistory)) {
-      history = savedHistory;
+    if (Array.isArray(sh)) {
+      history = sh;
     }
 
-    customPublications = normalizeCustomRegistry(savedCustom);
-    deletedPublications = normalizeDeletedRegistry(savedDeleted);
-  } catch (error) {
+    customPublications = normalizeCustom(sc);
+    deletedPublications = normalizeDeleted(sd);
+  } catch (e) {
     inventory = {};
     history = [];
     customPublications = {};
     deletedPublications = {};
   }
 
-  function isDeletedCode(code) {
+  function isDeleted(code) {
     return Object.prototype.hasOwnProperty.call(
       deletedPublications,
       normCode(code)
     );
   }
 
-  function isCustomCode(code) {
+  function isCustom(code) {
     code = normCode(code);
 
-    return Object.prototype.hasOwnProperty.call(
-      customPublications,
-      code
-    ) || isDeletedCode(code);
+    return Object.prototype.hasOwnProperty.call(customPublications, code) ||
+      isDeleted(code);
   }
 
-  function isCodeActive(code) {
+  function isActive(code) {
     code = normCode(code);
 
-    if (isDeletedCode(code)) return false;
+    if (isDeleted(code)) return false;
     if (validCodes[code]) return true;
 
-    return Object.prototype.hasOwnProperty.call(
-      customPublications,
-      code
-    ) && customPublications[code].active !== false;
+    return Object.prototype.hasOwnProperty.call(customPublications, code) &&
+      customPublications[code].active !== false;
   }
 
   function isCodeValid(code) {
-    return isCodeActive(code);
-  }
-
-  function escapeHtml(value) {
-    return String(value == null ? "" : value)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+    return isActive(code);
   }
 
   function categoryLabel(category) {
@@ -219,68 +184,44 @@
   function getCategory(code) {
     code = normCode(code);
 
-    if (
-      Object.prototype.hasOwnProperty.call(
-        customPublications,
-        code
-      )
-    ) {
+    if (customPublications[code]) {
       return categoryLabel(customPublications[code].category);
     }
 
-    if (isDeletedCode(code)) {
+    if (deletedPublications[code]) {
       return categoryLabel(deletedPublications[code].category);
     }
 
-    return validCodes[code]
-      ? "Standard publication"
-      : "Uncategorized";
+    return validCodes[code] ? "Standard publication" : "Uncategorized";
   }
 
   function setStatus(message) {
-    var status = document.getElementById("status");
-
-    if (status) {
-      status.textContent = message;
-    }
+    var el = document.getElementById("status");
+    if (el) el.textContent = message;
   }
 
   function addStyles() {
-    if (document.getElementById("inventory-scanner-styles")) {
-      return;
-    }
+    if (document.getElementById("inventory-scanner-styles")) return;
 
     var style = document.createElement("style");
     style.id = "inventory-scanner-styles";
 
     style.textContent = [
-      "#app{max-width:1100px;margin:28px auto;padding:0 18px;font-family:Arial,sans-serif;color:#202124;line-height:1.45}",
-      ".inv-card{background:#fff;border:1px solid #dfe3e8;border-radius:12px;padding:20px;margin:16px 0;box-shadow:0 2px 8px rgba(0,0,0,.04)}",
-      ".inv-title{font-size:28px;margin:0 0 6px}",
-      ".inv-muted{color:#5f6368;font-size:14px}",
+      "#app{max-width:1100px;margin:24px auto;padding:0 16px;font-family:Arial,sans-serif;color:#202124;line-height:1.45}",
+      ".inv-card{background:#fff;border:1px solid #dfe3e8;border-radius:12px;padding:18px;margin:16px 0;box-shadow:0 2px 8px rgba(0,0,0,.04)}",
+      ".inv-title{font-size:28px;margin:0 0 6px}.inv-muted{color:#5f6368;font-size:14px}",
       ".inv-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}",
       ".inv-btn{border:0;border-radius:7px;padding:10px 14px;cursor:pointer;background:#155eef;color:#fff;font-weight:600}",
-      ".inv-btn.secondary{background:#eef2f7;color:#202124}",
-      ".inv-btn.danger{background:#b42318;color:#fff}",
-      ".inv-btn.success{background:#087443;color:#fff}",
-      ".inv-btn:disabled{opacity:.6;cursor:wait}",
-      "#bulk-notepad{box-sizing:border-box;width:100%;min-height:190px;padding:12px;border:1px solid #c9ced6;border-radius:8px;font:14px/1.5 Consolas,monospace;resize:vertical}",
-      ".inv-table-wrap{overflow:auto}",
-      "table{border-collapse:collapse;width:100%;font-size:14px}",
-      "th,td{text-align:left;border-bottom:1px solid #e5e7eb;padding:10px 8px}",
-      "th{background:#f7f8fa}",
-      "tr.invalid-code{color:#b42318;background:#fff6f5}",
-      ".inv-badge{font-size:11px;background:#b42318;color:#fff;padding:2px 6px;border-radius:4px;margin-left:5px}",
-      ".review-badge{font-size:11px;background:#b54708;color:#fff;padding:2px 6px;border-radius:4px;margin-left:5px}",
-      ".publication-fields{display:grid;grid-template-columns:minmax(150px,1fr) minmax(180px,1fr) auto;gap:10px;align-items:end}",
-      ".publication-fields label{display:block;font-size:13px;font-weight:600;color:#475467}",
-      ".publication-fields input,.publication-fields select{display:block;box-sizing:border-box;width:100%;margin-top:6px;padding:10px;border:1px solid #c9ced6;border-radius:7px;background:#fff}",
-      "#preview{display:none;max-width:100%;max-height:340px;margin-top:12px;border-radius:8px}",
-      "#status{white-space:pre-wrap;font-size:13px;color:#475467;margin-top:10px}",
-      ".inv-history{max-height:220px;overflow:auto;font-family:Consolas,monospace;font-size:13px}",
-      "#scan-results{margin-top:12px}",
-      "#scan-results input,#scan-results select{box-sizing:border-box;border:1px solid #c9ced6;border-radius:6px;padding:8px}",
-      "@media(max-width:600px){.inv-title{font-size:23px}.inv-card{padding:14px}.publication-fields{grid-template-columns:1fr}}"
+      ".inv-btn.secondary{background:#eef2f7;color:#202124}.inv-btn.danger{background:#b42318;color:#fff}.inv-btn.success{background:#087443;color:#fff}.inv-btn:disabled{opacity:.55;cursor:wait}",
+      ".inv-table-wrap{overflow:auto}table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;border-bottom:1px solid #e5e7eb;padding:9px 8px}th{background:#f7f8fa}",
+      ".publication-fields{display:grid;grid-template-columns:minmax(150px,1fr) minmax(180px,1fr) auto;gap:10px;align-items:end}.publication-fields label{display:block;font-size:13px;font-weight:600;color:#475467}",
+      ".publication-fields input,.publication-fields select{box-sizing:border-box;display:block;width:100%;margin-top:6px;padding:10px;border:1px solid #c9ced6;border-radius:7px;background:#fff}",
+      "#camera-video{display:block;width:100%;max-height:65vh;min-height:220px;object-fit:contain;background:#111;border-radius:10px;margin-top:12px}#camera-video[hidden]{display:none}",
+      "#preview{display:none;max-width:100%;max-height:320px;margin-top:12px;border-radius:8px}",
+      "#status{white-space:pre-wrap;font-size:13px;color:#475467;margin-top:10px}.inv-history{max-height:220px;overflow:auto;font-family:Consolas,monospace;font-size:13px}",
+      "#scan-results{margin-top:12px}#scan-results input,#scan-results select{box-sizing:border-box;border:1px solid #c9ced6;border-radius:6px;padding:8px}",
+      ".review-badge{font-size:11px;background:#b54708;color:#fff;padding:2px 6px;border-radius:4px}",
+      "@media(max-width:600px){.inv-title{font-size:23px}.inv-card{padding:13px}.publication-fields{grid-template-columns:1fr}.inv-btn{min-height:42px}}"
     ].join("\n");
 
     document.head.appendChild(style);
@@ -290,55 +231,34 @@
     try {
       localStorage.setItem("inventory", JSON.stringify(inventory));
       localStorage.setItem("history", JSON.stringify(history));
-      localStorage.setItem(
-        "customPublications",
-        JSON.stringify(customPublications)
-      );
-      localStorage.setItem(
-        "deletedPublications",
-        JSON.stringify(deletedPublications)
-      );
+      localStorage.setItem("customPublications", JSON.stringify(customPublications));
+      localStorage.setItem("deletedPublications", JSON.stringify(deletedPublications));
     } catch (error) {
-      console.warn("Inventory could not be saved in this browser.", error);
+      console.warn("Could not save inventory in this browser.", error);
     }
 
     render();
   }
 
-  // Add a custom publication or update its category.
   function addPublicationCode(event) {
     event.preventDefault();
 
-    var codeInput = document.getElementById("new-code");
-    var categoryInput = document.getElementById("new-category");
+    var code = normCode(document.getElementById("new-code").value);
+    var category = document.getElementById("new-category").value;
 
-    var code = normCode(codeInput && codeInput.value);
-    var category = categoryInput && categoryInput.value;
-
-    if (!code) {
-      alert("Enter a publication code first.");
-      return;
-    }
+    if (!code) return alert("Enter a publication code first.");
 
     if (!/^[a-z0-9][a-z0-9.-]*$/.test(code)) {
-      alert("Use only letters, numbers, periods, and hyphens in the code.");
-      return;
+      return alert("Use only letters, numbers, periods, and hyphens in the code.");
     }
 
-    if (validCodes[code] && !isCustomCode(code)) {
-      alert("That code already exists in the standard publication list.");
-      return;
+    if (validCodes[code] && !isCustom(code)) {
+      return alert("That code already exists in the standard list.");
     }
 
     if (!validCategory(category)) {
-      alert("Choose a category from the list.");
-      return;
+      return alert("Choose a valid category.");
     }
-
-    var existed = Object.prototype.hasOwnProperty.call(
-      customPublications,
-      code
-    );
 
     delete deletedPublications[code];
 
@@ -348,134 +268,79 @@
     };
 
     save();
-
-    setStatus(
-      (existed ? "Updated publication " : "Added publication code ") +
-      code + " (" + categoryLabel(category) + ")."
-    );
-
-    var refreshedInput = document.getElementById("new-code");
-
-    if (refreshedInput) {
-      refreshedInput.value = "";
-      refreshedInput.focus();
-    }
+    setStatus("Saved custom publication " + code + " under " + categoryLabel(category) + ".");
   }
 
   function deletePublicationCode(code) {
     code = normCode(code);
 
-    if (
-      !Object.prototype.hasOwnProperty.call(
-        customPublications,
-        code
-      )
-    ) {
-      return;
-    }
+    if (!customPublications[code]) return;
 
-    var record = customPublications[code];
-
-    if (!window.confirm(
-      "Delete publication '" + code +
-      "'? Its current inventory totals will be removed, but history will remain. " +
-      "Download Updated Template to remove its row from the workbook."
+    if (!confirm(
+      "Delete " + code +
+      "? Its current totals will be removed, but history will remain. " +
+      "Download the updated template to remove its row from the workbook."
     )) {
       return;
     }
 
     deletedPublications[code] = {
-      category: record.category || "Books"
+      category: customPublications[code].category || "Books"
     };
 
     delete customPublications[code];
 
     Object.keys(inventory).forEach(function (key) {
-      var separator = key.indexOf(":");
-      var itemCode = separator >= 0
-        ? key.slice(separator + 1)
-        : key;
+      var p = key.indexOf(":");
 
-      if (normCode(itemCode) === code) {
+      if (normCode(p >= 0 ? key.slice(p + 1) : key) === code) {
         delete inventory[key];
       }
     });
 
     save();
-
-    setStatus(
-      "Deleted " + code +
-      ". Current totals were removed; history was kept. " +
-      "Download Updated Template to update the official workbook."
-    );
+    setStatus("Deleted " + code + ". History was kept. Download Updated Template to publish this change in the workbook.");
   }
 
   function parseBulkLine(line) {
-    var match = String(line || "").match(
+    var m = String(line || "").match(
       /^\s*(.*?)\s*-\s*(TG|E)\s*-\s*(.*?)\s*$/i
     );
 
-    var code;
-    var language;
-    var expression;
+    if (!m) return null;
 
-    if (match) {
-      code = match[1].trim();
-      language = match[2].toUpperCase();
-      expression = match[3].trim();
-    } else {
-      match = String(line || "").match(
-        /^\s*(TG|E)\s*-\s*(.*?)\s*-\s*(.*?)\s*$/i
-      );
-
-      if (!match) return null;
-
-      language = match[1].toUpperCase();
-      code = match[2].trim();
-      expression = match[3].trim();
-    }
-
-    if (!code || !expression) return null;
-
-    var numbers = expression.match(/\d[\d,]*/g) || [];
-
+    var numbers = m[3].match(/\d[\d,]*/g) || [];
     if (!numbers.length) return null;
 
-    var quantity = numbers.reduce(function (sum, value) {
-      return sum + (
-        parseInt(value.replace(/,/g, ""), 10) || 0
-      );
-    }, 0);
-
     return {
-      code: normCode(code),
-      language: language,
-      quantity: quantity
+      code: normCode(m[1]),
+      language: m[2].toUpperCase(),
+      quantity: numbers.reduce(function (sum, v) {
+        return sum + (parseInt(v.replace(/,/g, ""), 10) || 0);
+      }, 0)
     };
   }
 
   function processBulkInput() {
     var area = document.getElementById("bulk-notepad");
-
     if (!area) return;
 
     var processed = 0;
-    var skippedLines = [];
+    var skipped = [];
 
-    area.value.split(/\r?\n/).forEach(function (rawLine) {
-      if (!rawLine.trim()) return;
+    area.value.split(/\r?\n/).forEach(function (line) {
+      if (!line.trim()) return;
 
-      var item = parseBulkLine(rawLine);
+      var item = parseBulkLine(line);
 
-      if (!item || !isCodeActive(item.code)) {
-        skippedLines.push(rawLine);
+      if (!item || !isActive(item.code)) {
+        skipped.push(line);
         return;
       }
 
       var key = item.language + ":" + item.code;
 
-      inventory[key] =
-        (Number(inventory[key]) || 0) + item.quantity;
+      inventory[key] = (Number(inventory[key]) || 0) + item.quantity;
 
       history.push({
         code: item.code,
@@ -486,19 +351,13 @@
       processed++;
     });
 
-    area.value = skippedLines.join("\n");
-
+    area.value = skipped.join("\n");
     save();
 
-    if (skippedLines.length) {
-      alert(
-        "Loaded " + processed + " line(s). " +
-        skippedLines.length +
-        " line(s) were skipped because of invalid formatting, an unknown code, or a deleted code. Skipped lines remain in the checklist."
-      );
-    } else {
-      alert("Success! Loaded " + processed + " line(s).");
-    }
+    alert(
+      "Processed " + processed + " line(s)." +
+      (skipped.length ? " " + skipped.length + " unprocessed line(s) remain in the checklist." : "")
+    );
   }
 
   function removeInventory(key) {
@@ -512,42 +371,31 @@
   }
 
   function clearAll() {
-    if (!window.confirm(
-      "Clear all inventory entries and history? Custom publication codes and deletion records will be kept."
-    )) {
+    if (!confirm("Clear all inventory entries and history? Custom publication definitions will remain.")) {
       return;
     }
 
     inventory = {};
     history = [];
-
     save();
   }
 
-  // Load external browser libraries as needed.
-  function loadLibrary(url, globalName, libraryName) {
+  function loadLibrary(url, globalName, which) {
     if (window[globalName]) {
       return Promise.resolve(window[globalName]);
     }
 
-    var existingPromise = libraryName === "Tesseract"
-      ? ocrPromise
-      : zipPromise;
-
-    if (existingPromise) return existingPromise;
+    var existing = which === "ocr" ? ocrPromise : zipPromise;
+    if (existing) return existing;
 
     var promise = new Promise(function (resolve, reject) {
       var script = document.createElement("script");
-
       script.src = url;
       script.async = true;
 
       script.onload = function () {
-        if (window[globalName]) {
-          resolve(window[globalName]);
-        } else {
-          reject(new Error(globalName + " did not initialize."));
-        }
+        if (window[globalName]) resolve(window[globalName]);
+        else reject(new Error(globalName + " failed to initialize."));
       };
 
       script.onerror = function () {
@@ -556,20 +404,15 @@
 
       document.head.appendChild(script);
     }).catch(function (error) {
-      if (libraryName === "Tesseract") {
-        ocrPromise = null;
-      } else {
-        zipPromise = null;
-      }
+      if (which === "ocr") ocrPromise = null;
+      else zipPromise = null;
 
+      workerPromise = null;
       throw error;
     });
 
-    if (libraryName === "Tesseract") {
-      ocrPromise = promise;
-    } else {
-      zipPromise = promise;
-    }
+    if (which === "ocr") ocrPromise = promise;
+    else zipPromise = promise;
 
     return promise;
   }
@@ -578,7 +421,7 @@
     return loadLibrary(
       "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
       "Tesseract",
-      "Tesseract"
+      "ocr"
     );
   }
 
@@ -586,17 +429,38 @@
     return loadLibrary(
       "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
       "JSZip",
-      "JSZip"
+      "zip"
     );
   }
 
-  function editDistance(a, b) {
-    if (Math.abs(a.length - b.length) > 2) return 99;
+  function getOCRWorker() {
+    if (workerPromise) return workerPromise;
 
-    var prev = [];
-    var curr = [];
-    var i;
-    var j;
+    workerPromise = loadOCR().then(function (Tesseract) {
+      return Tesseract.createWorker("eng", 1, {
+        logger: function (message) {
+          if (message && message.status && scanning) {
+            setStatus(
+              "OCR engine: " + message.status +
+              (typeof message.progress === "number"
+                ? " " + Math.round(message.progress * 100) + "%"
+                : "")
+            );
+          }
+        }
+      });
+    }).catch(function (error) {
+      workerPromise = null;
+      throw error;
+    });
+
+    return workerPromise;
+  }
+
+  function editDistance(a, b) {
+    if (Math.abs(a.length - b.length) > 1) return 99;
+
+    var prev = [], curr = [], i, j;
 
     for (j = 0; j <= b.length; j++) prev[j] = j;
 
@@ -607,8 +471,7 @@
         curr[j] = Math.min(
           curr[j - 1] + 1,
           prev[j] + 1,
-          prev[j - 1] +
-            (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1)
+          prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
         );
       }
 
@@ -618,44 +481,38 @@
     return prev[b.length];
   }
 
-  function activeCodeList() {
-    var list = Object.keys(validCodes).filter(function (code) {
-      return isCodeActive(code);
-    });
+  function activeCodes() {
+    var result = Object.keys(validCodes).filter(isActive);
 
     Object.keys(customPublications).forEach(function (code) {
-      if (isCodeActive(code) && list.indexOf(code) < 0) {
-        list.push(code);
+      if (isActive(code) && result.indexOf(code) < 0) {
+        result.push(code);
       }
     });
 
-    return list;
+    return result.sort(function (a, b) {
+      return b.length - a.length;
+    });
   }
 
-  // Only suggest a fuzzy code match when one registered code is uniquely closest.
-  function resolveOCRCode(candidate) {
+  function resolveCode(candidate) {
     candidate = normCode(candidate).replace(/[^a-z0-9.-]/g, "");
 
-    if (!candidate) return null;
-
-    if (isCodeActive(candidate)) {
-      return {
-        code: candidate,
-        needsReview: false
-      };
+    if (isActive(candidate)) {
+      return { code: candidate, needsReview: false };
     }
 
-    var codes = activeCodeList();
+    var codes = activeCodes();
     var best = 99;
     var matches = [];
 
     codes.forEach(function (code) {
-      var distance = editDistance(candidate, code);
+      var d = editDistance(candidate, code);
 
-      if (distance < best) {
-        best = distance;
+      if (d < best) {
+        best = d;
         matches = [code];
-      } else if (distance === best) {
+      } else if (d === best) {
         matches.push(code);
       }
     });
@@ -671,9 +528,8 @@
     return null;
   }
 
-  // Parse a handwritten box label, including labels where the quantity is
-  // on the same line as the code or where OCR has joined nearby lines.
-  function parseInventoryLabel(text, meta) {
+  // Parse handwritten labels such as WP26.1-TG-600, G18.2-E-500, NWT-TG-16.
+  function parseLabel(text, meta) {
     text = String(text || "")
       .replace(/[–—−]/g, "-")
       .replace(/[：]/g, ":")
@@ -681,50 +537,36 @@
 
     if (!text) return null;
 
-    var langMatch =
-      /(?:^|[^A-Z0-9])((?:T\s*\.?\s*G)|E)(?:\s*[-:=]\s*|\s+)([0-9][0-9,OQIl|]{0,5})\b/i.exec(text);
+    var langRe = /(^|[^A-Za-z0-9])(TG|T6|E)(?=$|[^A-Za-z0-9])/i;
+    var lm = langRe.exec(text);
 
-    if (!langMatch) return null;
+    if (!lm) return null;
 
-    var langAt = langMatch.index +
-      langMatch[0].toLowerCase().lastIndexOf(langMatch[1].toLowerCase());
+    var langAt = lm.index + lm[1].length;
+    var langToken = lm[2].toUpperCase();
+    var language = (langToken === "TG" || langToken === "T6") ? "TG" : "E";
 
     var prefix = text.slice(0, langAt)
       .replace(/[\s\-:=|]+$/g, "")
       .trim();
 
-    var tokens = prefix.match(/[A-Za-z0-9][A-Za-z0-9.-]*/g) || [];
-
+    var tokens = prefix.match(/[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*/g) || [];
     if (!tokens.length) return null;
 
     var resolved = null;
-    var maxTokens = Math.min(5, tokens.length);
 
-    // Prefer an exact code match.
-    for (var count = 1; count <= maxTokens; count++) {
-      var exactCandidate = tokens.slice(-count).join("")
-        .replace(/[^a-z0-9.-]/gi, "");
+    for (var c = 1; c <= Math.min(4, tokens.length); c++) {
+      var candidate = normCode(tokens.slice(-c).join(""));
 
-      exactCandidate = normCode(exactCandidate);
-
-      if (isCodeActive(exactCandidate)) {
-        resolved = {
-          code: exactCandidate,
-          needsReview: false
-        };
+      if (isActive(candidate)) {
+        resolved = { code: candidate, needsReview: false };
         break;
       }
     }
 
-    // If an exact match failed, try a one-character suggestion.
     if (!resolved) {
-      for (var count2 = 1; count2 <= maxTokens; count2++) {
-        var fuzzyCandidate = normCode(
-          tokens.slice(-count2).join("")
-            .replace(/[^a-z0-9.-]/gi, "")
-        );
-
-        var fuzzy = resolveOCRCode(fuzzyCandidate);
+      for (var f = 1; f <= Math.min(4, tokens.length); f++) {
+        var fuzzy = resolveCode(tokens.slice(-f).join(""));
 
         if (fuzzy) {
           resolved = fuzzy;
@@ -735,215 +577,137 @@
 
     if (!resolved) return null;
 
-    var quantityText = langMatch[2]
+    var afterLang = text.slice(langAt + lm[2].length);
+    var qm = /(?:^|[\s:=\-|])([0-9][0-9,OoQqIl|]{0,7})\b/.exec(afterLang);
+
+    if (!qm) return null;
+
+    var quantityText = qm[1]
       .replace(/,/g, "")
-      .replace(/[OQ]/gi, "0")
+      .replace(/[OoQq]/g, "0")
       .replace(/[Il|]/g, "1");
 
     var quantity = parseInt(quantityText, 10);
-
     if (!Number.isFinite(quantity) || quantity < 0) return null;
-
-    var langToken = langMatch[1]
-      .replace(/[.\s]/g, "")
-      .toUpperCase();
-
-    var language = langToken === "TG"
-      ? "TG"
-      : (langToken === "E" ? "E" : null);
-
-    if (!language) return null;
 
     return {
       code: resolved.code,
       language: language,
       quantity: quantity,
       needsReview: !!resolved.needsReview,
-      rawCode: resolved.rawCode || "",
-      confidence: meta && Number.isFinite(meta.confidence)
-        ? meta.confidence
-        : 0,
+      confidence: meta && Number.isFinite(meta.confidence) ? meta.confidence : 0,
       x: meta && Number.isFinite(meta.x) ? meta.x : 0,
       y: meta && Number.isFinite(meta.y) ? meta.y : 0,
+      left: meta && Number.isFinite(meta.left) ? meta.left : 0,
+      right: meta && Number.isFinite(meta.right) ? meta.right : 0,
+      top: meta && Number.isFinite(meta.top) ? meta.top : 0,
+      bottom: meta && Number.isFinite(meta.bottom) ? meta.bottom : 0,
       quantityConflict: false
     };
   }
 
-  function imageFromFile(file) {
-    return new Promise(function (resolve, reject) {
-      var image = new Image();
-      var url = URL.createObjectURL(file);
+  function makeBaseCanvas(source) {
+    var sourceW = source.videoWidth || source.naturalWidth || source.width;
+    var sourceH = source.videoHeight || source.naturalHeight || source.height;
 
-      image.onload = function () {
-        URL.revokeObjectURL(url);
-        resolve(image);
-      };
+    if (!sourceW || !sourceH) {
+      throw new Error("Camera frame is not ready. Wait a moment and try again.");
+    }
 
-      image.onerror = function () {
-        URL.revokeObjectURL(url);
-        reject(new Error("The selected image could not be opened."));
-      };
-
-      image.src = url;
-    });
-  }
-
-  // Resize huge camera images before processing.
-  function makeBaseCanvas(image) {
-    var maxDimension = 2400;
-    var scale = Math.min(
-      1,
-      maxDimension / Math.max(image.naturalWidth, image.naturalHeight)
-    );
-
+    var scale = Math.min(1, 2400 / Math.max(sourceW, sourceH));
     var canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
 
-    var ctx = canvas.getContext("2d", {
-      willReadFrequently: true
-    });
+    canvas.width = Math.max(1, Math.round(sourceW * scale));
+    canvas.height = Math.max(1, Math.round(sourceH * scale));
 
+    var ctx = canvas.getContext("2d", { willReadFrequently: true });
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
 
     return canvas;
   }
 
-  // Make enlarged contrast and black-and-white variants of image regions.
-  function makeVariant(baseCanvas, crop, mode, upscale) {
+  function enhanceCrop(base, crop, mode, scale) {
     var canvas = document.createElement("canvas");
 
-    canvas.width = Math.max(1, Math.round(crop.w * upscale));
-    canvas.height = Math.max(1, Math.round(crop.h * upscale));
+    canvas.width = Math.max(1, Math.round(crop.w * scale));
+    canvas.height = Math.max(1, Math.round(crop.h * scale));
 
-    var ctx = canvas.getContext("2d", {
-      willReadFrequently: true
-    });
-
+    var ctx = canvas.getContext("2d", { willReadFrequently: true });
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
 
     ctx.drawImage(
-      baseCanvas,
-      crop.x,
-      crop.y,
-      crop.w,
-      crop.h,
-      0,
-      0,
-      canvas.width,
-      canvas.height
-    );
-
-    var imageData = ctx.getImageData(
+      base, crop.x, crop.y, crop.w, crop.h,
       0, 0, canvas.width, canvas.height
     );
 
-    var pixels = imageData.data;
-    var sum = 0;
-    var sampleCount = 0;
-    var stride = Math.max(
-      4,
-      Math.floor(pixels.length / 40000 / 4) * 4
-    );
+    var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    var p = imageData.data, samples = 0, sum = 0;
 
-    var i;
-
-    for (i = 0; i < pixels.length; i += stride) {
-      var sample = 0.299 * pixels[i] +
-        0.587 * pixels[i + 1] +
-        0.114 * pixels[i + 2];
-
-      sum += sample;
-      sampleCount++;
+    for (var i = 0; i < p.length; i += 160) {
+      sum += 0.299 * p[i] + 0.587 * p[i + 1] + 0.114 * p[i + 2];
+      samples++;
     }
 
-    var mean = sampleCount ? sum / sampleCount : 150;
-    var threshold = Math.max(92, Math.min(188, mean * 0.84));
+    var mean = samples ? sum / samples : 150;
+    var threshold = Math.max(90, Math.min(190, mean * 0.85));
 
-    for (i = 0; i < pixels.length; i += 4) {
-      var gray = 0.299 * pixels[i] +
-        0.587 * pixels[i + 1] +
-        0.114 * pixels[i + 2];
+    for (var j = 0; j < p.length; j += 4) {
+      var gray = 0.299 * p[j] + 0.587 * p[j + 1] + 0.114 * p[j + 2];
 
-      if (mode === "threshold") {
+      if (mode === "bw") {
         var bw = gray < threshold ? 0 : 255;
-
-        pixels[i] = bw;
-        pixels[i + 1] = bw;
-        pixels[i + 2] = bw;
+        p[j] = p[j + 1] = p[j + 2] = bw;
       } else {
-        var enhanced = Math.max(
-          0,
-          Math.min(255, (gray - 126) * 1.7 + 126)
-        );
-
-        pixels[i] = enhanced;
-        pixels[i + 1] = enhanced;
-        pixels[i + 2] = enhanced;
+        var enhanced = Math.max(0, Math.min(255, (gray - 122) * 1.65 + 128));
+        p[j] = p[j + 1] = p[j + 2] = enhanced;
       }
 
-      pixels[i + 3] = 255;
+      p[j + 3] = 255;
     }
 
     ctx.putImageData(imageData, 0, 0);
-
     return canvas;
   }
 
-  // One full-image pass plus six overlapping crop regions, each scanned twice.
-  function buildOCRJobs(baseCanvas) {
-    var width = baseCanvas.width;
-    var height = baseCanvas.height;
-    var jobs = [];
+  function makeOCRJobs(base) {
+    var w = base.width, h = base.height;
 
-    jobs.push({
-      crop: { x: 0, y: 0, w: width, h: height },
+    var jobs = [{
+      crop: { x: 0, y: 0, w: w, h: h },
       mode: "contrast",
-      upscale: Math.min(1.65, 2200 / Math.max(width, height)),
-      description: "whole photo"
-    });
+      scale: Math.min(1.4, 2200 / Math.max(w, h)),
+      name: "whole frame"
+    }];
 
-    var columns = width >= height ? 3 : 2;
-    var rows = width >= height ? 2 : 3;
-    var cellW = width / columns;
-    var cellH = height / rows;
-    var overlapX = cellW * 0.14;
-    var overlapY = cellH * 0.14;
+    var cols = w >= h ? 3 : 2;
+    var rows = w >= h ? 2 : 3;
+    var cw = w / cols, ch = h / rows;
+    var ox = cw * 0.12, oy = ch * 0.12;
 
-    for (var row = 0; row < rows; row++) {
-      for (var col = 0; col < columns; col++) {
-        var x = Math.max(0, col * cellW - overlapX);
-        var y = Math.max(0, row * cellH - overlapY);
-        var right = Math.min(width, (col + 1) * cellW + overlapX);
-        var bottom = Math.min(height, (row + 1) * cellH + overlapY);
-
-        var crop = {
-          x: x,
-          y: y,
-          w: right - x,
-          h: bottom - y
-        };
-
-        var upscale = Math.min(
-          2.25,
-          2000 / Math.max(crop.w, crop.h)
-        );
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        var x = Math.max(0, c * cw - ox);
+        var y = Math.max(0, r * ch - oy);
+        var right = Math.min(w, (c + 1) * cw + ox);
+        var bottom = Math.min(h, (r + 1) * ch + oy);
+        var crop = { x: x, y: y, w: right - x, h: bottom - y };
+        var scale = Math.min(2, 1800 / Math.max(crop.w, crop.h));
 
         jobs.push({
           crop: crop,
           mode: "contrast",
-          upscale: upscale,
-          description: "region " + (row * columns + col + 1) + " contrast"
+          scale: scale,
+          name: "region " + (r * cols + c + 1)
         });
 
         jobs.push({
           crop: crop,
-          mode: "threshold",
-          upscale: upscale,
-          description: "region " + (row * columns + col + 1) + " black-and-white"
+          mode: "bw",
+          scale: scale,
+          name: "region " + (r * cols + c + 1) + " black-and-white"
         });
       }
     }
@@ -951,235 +715,122 @@
     return jobs;
   }
 
-  function mapLineToBase(line, region, upscale, confidence) {
-    var box = line && line.bbox ? line.bbox : null;
+  function positionLine(line, job, confidence) {
+    var b = line && line.bbox ? line.bbox : null;
 
-    if (!box) {
+    if (!b) {
       return {
-        x: region.x + region.w / 2,
-        y: region.y + region.h / 2,
-        left: region.x,
-        right: region.x + region.w,
-        top: region.y,
-        bottom: region.y + region.h,
+        x: job.crop.x + job.crop.w / 2,
+        y: job.crop.y + job.crop.h / 2,
         confidence: confidence || 0
       };
     }
 
     return {
-      x: region.x + ((box.x0 + box.x1) / 2) / upscale,
-      y: region.y + ((box.y0 + box.y1) / 2) / upscale,
-      left: region.x + box.x0 / upscale,
-      right: region.x + box.x1 / upscale,
-      top: region.y + box.y0 / upscale,
-      bottom: region.y + box.y1 / upscale,
-      confidence: Number.isFinite(line.confidence)
-        ? line.confidence
-        : (confidence || 0)
+      x: job.crop.x + (b.x0 + b.x1) / 2 / job.scale,
+      y: job.crop.y + (b.y0 + b.y1) / 2 / job.scale,
+      left: job.crop.x + b.x0 / job.scale,
+      right: job.crop.x + b.x1 / job.scale,
+      top: job.crop.y + b.y0 / job.scale,
+      bottom: job.crop.y + b.y1 / job.scale,
+      confidence: Number.isFinite(line.confidence) ? line.confidence : (confidence || 0)
     };
   }
 
-  function xLinesNear(a, b, regionWidth) {
-    var overlap = Math.max(
-      0,
-      Math.min(a.right, b.right) - Math.max(a.left, b.left)
-    );
-
-    var minWidth = Math.max(
-      1,
-      Math.min(a.right - a.left, b.right - b.left)
-    );
-
-    var centerDiff = Math.abs(a.x - b.x);
-
-    return overlap / minWidth > 0.12 ||
-      centerDiff < Math.min(regionWidth * 0.15, 100);
-  }
-
-  // Parse separate OCR lines where the quantity appears below the code.
-  function detectionsFromOCR(data, job) {
-    var lines = data && Array.isArray(data.lines)
-      ? data.lines
-      : [];
-
-    var fallbackConfidence = data &&
-      Number.isFinite(data.confidence)
-      ? data.confidence
-      : 0;
-
-    if (!lines.length) {
-      lines = String(data && data.text || "")
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .map(function (text, index) {
-          return {
-            text: text,
-            confidence: fallbackConfidence,
-            bbox: {
-              x0: 0,
-              x1: 0,
-              y0: index * 24,
-              y1: index * 24 + 20
-            }
-          };
-        });
-    }
-
-    var prepared = lines.map(function (line) {
-      var position = mapLineToBase(
-        line,
-        job.crop,
-        job.upscale,
-        fallbackConfidence
-      );
-
-      position.text = String(line.text || "").trim();
-
-      return position;
+  function parseLines(lines, job, pageConfidence) {
+    var normalized = lines.map(function (line) {
+      var pos = positionLine(line, job, pageConfidence);
+      pos.text = String(line.text || "").trim();
+      return pos;
     }).filter(function (line) {
       return !!line.text;
     });
 
-    prepared.sort(function (a, b) {
+    normalized.sort(function (a, b) {
       return a.y - b.y || a.x - b.x;
     });
 
-    var found = [];
+    var result = [];
 
-    prepared.forEach(function (line, index) {
-      var direct = parseInventoryLabel(line.text, line);
+    normalized.forEach(function (line, index) {
+      var direct = parseLabel(line.text, line);
 
       if (direct) {
-        found.push(direct);
+        result.push(direct);
         return;
       }
 
-      // A handwritten label may appear as "WP26.1-TG" then "-600".
-      for (
-        var next = index + 1;
-        next < Math.min(prepared.length, index + 3);
-        next++
-      ) {
-        var other = prepared[next];
-        var verticalGap = other.top - line.bottom;
-        var maxGap = Math.max(
-          22,
-          Math.min(60, job.crop.h * 0.08)
-        );
+      for (var n = index + 1; n < Math.min(normalized.length, index + 3); n++) {
+        var next = normalized[n];
 
-        if (verticalGap > maxGap) break;
-        if (Math.abs(other.y - line.y) > job.crop.h * 0.12) continue;
-        if (!xLinesNear(line, other, job.crop.w)) continue;
+        var gap = next.top != null && line.bottom != null
+          ? next.top - line.bottom
+          : Math.abs(next.y - line.y);
 
-        var combined = line.text + " " + other.text;
-
-        var joinedMeta = {
-          x: (line.x + other.x) / 2,
-          y: (line.y + other.y) / 2,
-          confidence: Math.min(
-            line.confidence || 0,
-            other.confidence || 0
-          )
-        };
-
-        var joined = parseInventoryLabel(combined, joinedMeta);
-
-        if (joined) {
-          found.push(joined);
-          break;
-        }
-
-        if (next + 1 < prepared.length) {
-          var third = prepared[next + 1];
-          var gap3 = third.top - other.bottom;
-
-          if (
-            gap3 <= maxGap &&
-            xLinesNear(line, third, job.crop.w)
-          ) {
-            var triple = parseInventoryLabel(
-              line.text + " " + other.text + " " + third.text,
-              joinedMeta
-            );
-
-            if (triple) {
-              found.push(triple);
-              break;
-            }
-          }
-        }
-      }
-    });
-
-    return found;
-  }
-
-  // Remove duplicate readings of the same physical label across overlapping
-  // crops and enhancement passes, while preserving different box locations.
-  function deduplicateDetections(candidates, baseWidth, baseHeight) {
-    var sorted = candidates.slice().sort(function (a, b) {
-      return (b.confidence || 0) - (a.confidence || 0);
-    });
-
-    var output = [];
-    var tolerance = Math.max(
-      28,
-      Math.min(66, Math.max(baseWidth, baseHeight) * 0.027)
-    );
-
-    sorted.forEach(function (candidate) {
-      var existing = null;
-
-      for (var i = 0; i < output.length; i++) {
-        var item = output[i];
-
-        if (
-          item.code !== candidate.code ||
-          item.language !== candidate.language
-        ) {
+        if (gap > 60 || Math.abs(next.x - line.x) > job.crop.w * 0.25) {
           continue;
         }
 
-        var dx = item.x - candidate.x;
-        var dy = item.y - candidate.y;
+        var joined = parseLabel(line.text + " " + next.text, {
+          x: (line.x + next.x) / 2,
+          y: (line.y + next.y) / 2,
+          confidence: Math.min(line.confidence || 0, next.confidence || 0)
+        });
 
-        if (Math.sqrt(dx * dx + dy * dy) <= tolerance) {
-          existing = item;
+        if (joined) {
+          result.push(joined);
+          break;
+        }
+      }
+    });
+
+    return result;
+  }
+
+  function deduplicateDetections(candidates, base) {
+    var ordered = candidates.slice().sort(function (a, b) {
+      return (b.confidence || 0) - (a.confidence || 0);
+    });
+
+    var result = [];
+    var tolerance = Math.max(26, Math.min(62, Math.max(base.width, base.height) * 0.025));
+
+    ordered.forEach(function (d) {
+      var duplicate = null;
+
+      for (var i = 0; i < result.length; i++) {
+        var r = result[i];
+
+        if (r.code !== d.code || r.language !== d.language) continue;
+
+        var dx = r.x - d.x, dy = r.y - d.y;
+
+        if (Math.sqrt(dx * dx + dy * dy) < tolerance) {
+          duplicate = r;
           break;
         }
       }
 
-      if (!existing) {
-        output.push(Object.assign({}, candidate));
-      } else {
-        if (existing.quantity !== candidate.quantity) {
-          existing.quantityConflict = true;
-        }
-
-        existing.needsReview =
-          existing.needsReview && candidate.needsReview;
-
-        existing.quantityConflict =
-          existing.quantityConflict || !!candidate.quantityConflict;
+      if (!duplicate) {
+        result.push(Object.assign({}, d));
+      } else if (duplicate.quantity !== d.quantity) {
+        duplicate.quantityConflict = true;
       }
     });
 
-    return output.sort(function (a, b) {
-      return a.y - b.y || a.x - b.x;
-    });
+    return result;
   }
 
-  // Sum the quantities for every unique label with the same code and language.
   function groupDetections(detections) {
     var groups = Object.create(null);
 
-    detections.forEach(function (item) {
-      var key = item.code + "|" + item.language;
+    detections.forEach(function (d) {
+      var key = d.code + "|" + d.language;
 
       if (!groups[key]) {
         groups[key] = {
-          code: item.code,
-          language: item.language,
+          code: d.code,
+          language: d.language,
           count: 0,
           quantity: 0,
           needsReview: false,
@@ -1188,13 +839,14 @@
       }
 
       groups[key].count++;
-      groups[key].quantity += item.quantity;
-
+      groups[key].quantity += d.quantity;
       groups[key].needsReview =
-        groups[key].needsReview || item.needsReview;
+        groups[key].needsReview ||
+        !!d.needsReview ||
+        (d.confidence > 0 && d.confidence < 48);
 
       groups[key].quantityConflict =
-        groups[key].quantityConflict || !!item.quantityConflict;
+        groups[key].quantityConflict || !!d.quantityConflict;
     });
 
     return Object.keys(groups).map(function (key) {
@@ -1204,58 +856,38 @@
 
   function renderScanResults(groups) {
     var results = document.getElementById("scan-results");
-
     if (!results) return;
 
     if (!groups.length) {
       results.innerHTML =
-        '<p class="inv-muted">No complete registered code/language/quantity labels were detected. Try a closer, clearer photo, or add the publication code first.</p>';
-
+        '<p class="inv-muted">No complete registered code/language/quantity labels were detected. Move closer, hold the camera steady, and try again.</p>';
       return;
     }
 
     results.innerHTML = [
-      '<p class="inv-muted">Repeated labels with the same code and language are combined. The total is the sum of the quantity written on each unique box label. Review orange warnings and correct quantities before adding.</p>',
-      '<div class="inv-table-wrap"><table><thead><tr><th>Publication code</th><th>Language</th><th>Labels detected</th><th>Combined quantity</th><th>Review</th></tr></thead><tbody>',
+      '<p class="inv-muted">Repeated labels for the same code and language are combined. The total sums the quantity written on each detected box label. Review every row before adding.</p>',
+      '<div class="inv-table-wrap"><table><thead><tr><th>Code</th><th>Language</th><th>Labels</th><th>Combined quantity</th><th>Review</th></tr></thead><tbody>',
+      groups.map(function (g, i) {
+        var warning = g.needsReview || g.quantityConflict;
+        var note = g.quantityConflict
+          ? "Check conflicting readings"
+          : (g.needsReview ? "Check OCR reading" : "OK");
 
-      groups.map(function (group, index) {
-        var warning = group.needsReview || group.quantityConflict;
-
-        var reviewText = group.quantityConflict
-          ? "Conflicting OCR totals — check"
-          : (group.needsReview ? "Check suggested code" : "Looks good");
-
-        return '<tr data-scan-row="' + index + '">' +
-          '<td><input class="scan-code-input" type="text" value="' +
-          escapeHtml(group.code) +
-          '" aria-label="Detected publication code ' + (index + 1) +
-          '" style="width:105px"></td>' +
-
-          '<td><select class="scan-language-input" aria-label="Detected language ' +
-          (index + 1) + '">' +
-          '<option value="TG"' +
-          (group.language === "TG" ? " selected" : "") + '>TG</option>' +
-          '<option value="E"' +
-          (group.language === "E" ? " selected" : "") + '>E</option>' +
+        return '<tr data-scan-row="' + i + '">' +
+          '<td><input class="scan-code-input" value="' + escapeHtml(g.code) +
+          '" aria-label="Publication code" style="width:105px"></td>' +
+          '<td><select class="scan-language-input">' +
+          '<option value="TG"' + (g.language === "TG" ? " selected" : "") + '>TG</option>' +
+          '<option value="E"' + (g.language === "E" ? " selected" : "") + '>E</option>' +
           '</select></td>' +
-
-          '<td>' + group.count + '</td>' +
-
+          '<td>' + g.count + '</td>' +
           '<td><input class="scan-quantity" type="number" min="0" step="1" value="' +
-          group.quantity +
-          '" aria-label="Combined quantity ' + (index + 1) +
-          '" style="width:125px"></td>' +
-
-          '<td>' +
-          (warning
-            ? '<span class="review-badge">' + escapeHtml(reviewText) + '</span>'
-            : escapeHtml(reviewText)) +
-          '</td>' +
-          '</tr>';
+          g.quantity + '" style="width:120px"></td>' +
+          '<td>' + (warning
+            ? '<span class="review-badge">' + escapeHtml(note) + '</span>'
+            : escapeHtml(note)) + '</td></tr>';
       }).join(""),
-
-      '</tbody></table></div>',
-      '<div class="inv-controls"><button type="button" class="inv-btn success" id="add-scanned-results">Add reviewed totals to inventory</button></div>'
+      '</tbody></table></div><div class="inv-controls"><button type="button" class="inv-btn success" id="add-scanned-results">Add reviewed totals to inventory</button></div>'
     ].join("");
 
     document.getElementById("add-scanned-results").addEventListener(
@@ -1266,22 +898,15 @@
 
   function addScannedResults() {
     var rows = document.querySelectorAll("[data-scan-row]");
-    var added = 0;
-    var skipped = 0;
+    var added = 0, skipped = 0;
 
     Array.prototype.forEach.call(rows, function (row) {
-      var codeInput = row.querySelector(".scan-code-input");
-      var languageInput = row.querySelector(".scan-language-input");
-      var quantityInput = row.querySelector(".scan-quantity");
-
-      var code = normCode(codeInput && codeInput.value);
-      var language = languageInput ? languageInput.value : "TG";
-      var quantity = quantityInput
-        ? Number(quantityInput.value)
-        : 0;
+      var code = normCode(row.querySelector(".scan-code-input").value);
+      var language = row.querySelector(".scan-language-input").value;
+      var quantity = Number(row.querySelector(".scan-quantity").value);
 
       if (
-        !isCodeActive(code) ||
+        !isActive(code) ||
         (language !== "TG" && language !== "E") ||
         !Number.isFinite(quantity) ||
         quantity <= 0
@@ -1292,8 +917,7 @@
 
       var key = language + ":" + code;
 
-      inventory[key] =
-        (Number(inventory[key]) || 0) + quantity;
+      inventory[key] = (Number(inventory[key]) || 0) + quantity;
 
       history.push({
         code: code,
@@ -1305,166 +929,275 @@
     });
 
     if (!added) {
-      alert(
-        "No valid quantities were added. Check the publication codes and enter quantities greater than zero."
-      );
+      alert("No valid quantities were added. Check code, language, and quantity fields.");
       return;
     }
 
     save();
 
     setStatus(
-      "Added " + added +
-      " combined code/language total(s) to inventory." +
-      (skipped ? " Skipped " + skipped + " invalid row(s)." : "") +
-      " Repeated box labels were summed before adding."
+      "Added " + added + " grouped code/language total(s)." +
+      (skipped ? " Skipped " + skipped + " invalid row(s)." : "")
     );
   }
 
-  function readPhoto() {
-    var input = document.getElementById("photo");
-    var file = input && input.files ? input.files[0] : null;
-    var preview = document.getElementById("preview");
-    var button = document.getElementById("read");
+  function canvasFromFile(file) {
+    return new Promise(function (resolve, reject) {
+      var image = new Image();
+      var url = URL.createObjectURL(file);
 
-    if (!file) {
-      alert("Capture or choose a photo of the handwritten box labels first.");
+      image.onload = function () {
+        URL.revokeObjectURL(url);
+
+        try {
+          resolve(makeBaseCanvas(image));
+        } catch (e) {
+          reject(e);
+        }
+      };
+
+      image.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error("Could not open the selected image."));
+      };
+
+      image.src = url;
+    });
+  }
+
+  function stopCamera() {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(function (track) {
+        track.stop();
+      });
+
+      cameraStream = null;
+    }
+
+    var video = document.getElementById("camera-video");
+
+    if (video) {
+      video.pause();
+      video.srcObject = null;
+      video.hidden = true;
+    }
+
+    var start = document.getElementById("start-camera");
+    var stop = document.getElementById("stop-camera");
+    var scan = document.getElementById("scan-current-view");
+
+    if (start) {
+      start.disabled = false;
+      start.textContent = "Start Camera";
+    }
+
+    if (stop) stop.disabled = true;
+    if (scan) scan.disabled = true;
+  }
+
+  function startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("Camera access is unavailable in this browser. Open the HTTPS site in Chrome on Android, allow camera permission, or use the photo upload option.");
       return;
     }
 
-    if (preview.dataset.objectUrl) {
-      URL.revokeObjectURL(preview.dataset.objectUrl);
+    var start = document.getElementById("start-camera");
+
+    if (start) {
+      start.disabled = true;
+      start.textContent = "Opening camera...";
     }
 
-    preview.dataset.objectUrl = URL.createObjectURL(file);
-    preview.src = preview.dataset.objectUrl;
-    preview.style.display = "block";
+    navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      }
+    }).then(function (stream) {
+      cameraStream = stream;
 
-    button.disabled = true;
+      var video = document.getElementById("camera-video");
 
-    var results = document.getElementById("scan-results");
-    if (results) results.innerHTML = "";
+      if (!video) {
+        throw new Error("Camera preview is not available on the page.");
+      }
 
-    setStatus("Opening photo and preparing enhanced image regions...");
+      video.hidden = false;
+      video.srcObject = stream;
+      video.setAttribute("playsinline", "true");
+      video.muted = true;
 
-    imageFromFile(file).then(function (image) {
-      var base = makeBaseCanvas(image);
-      var jobs = buildOCRJobs(base);
+      return video.play();
+    }).then(function () {
+      var stop = document.getElementById("stop-camera");
+      var scan = document.getElementById("scan-current-view");
 
-      return loadOCR().then(function (Tesseract) {
-        if (typeof Tesseract.createWorker !== "function") {
-          throw new Error(
-            "OCR worker initialization is unavailable. Refresh and try again."
-          );
+      if (start) {
+        start.disabled = true;
+        start.textContent = "Camera On";
+      }
+
+      if (stop) stop.disabled = false;
+      if (scan) scan.disabled = false;
+
+      setStatus("Camera is on. Move close enough to read the marker, hold steady, then tap Scan Current View. Scanning does not add inventory until you confirm the results.");
+    }).catch(function (error) {
+      stopCamera();
+
+      if (start) {
+        start.disabled = false;
+        start.textContent = "Start Camera";
+      }
+
+      alert("Could not start the camera: " + error.message + ". Allow camera permission in your Android browser settings and try again.");
+    });
+  }
+
+  function scanCanvas(base) {
+    if (scanning) {
+      return Promise.reject(new Error("A scan is already in progress."));
+    }
+
+    scanning = true;
+
+    var jobs = makeOCRJobs(base);
+    var candidates = [];
+    var rawText = [];
+
+    var button = document.getElementById("scan-current-view");
+    var photoButton = document.getElementById("scan-uploaded-photo");
+
+    if (button) button.disabled = true;
+    if (photoButton) photoButton.disabled = true;
+
+    return getOCRWorker().then(function (worker) {
+      var index = 0;
+
+      function next() {
+        if (index >= jobs.length) {
+          return Promise.resolve();
         }
 
-        var candidates = [];
-        var rawText = [];
+        var job = jobs[index++];
 
-        return Tesseract.createWorker("eng", 1, {
-          logger: function (message) {
-            if (message && message.status) {
-              setStatus(
-                "OCR engine: " + message.status +
-                (typeof message.progress === "number"
-                  ? " " + Math.round(message.progress * 100) + "%"
-                  : "")
-              );
-            }
-          }
-        }).then(function (worker) {
-          var jobIndex = 0;
+        setStatus(
+          "Scanning " + job.name + " (" +
+          index + " of " + jobs.length + "). Keep the phone still..."
+        );
 
-          function runNextJob() {
-            if (jobIndex >= jobs.length) {
-              return Promise.resolve();
-            }
+        var variant = enhanceCrop(
+          base,
+          job.crop,
+          job.mode,
+          job.scale
+        );
 
-            var job = jobs[jobIndex++];
+        return worker.setParameters({
+          tessedit_pageseg_mode: job.mode === "bw" ? "6" : "11",
+          preserve_interword_spaces: "1",
+          user_defined_dpi: "300"
+        }).then(function () {
+          return worker.recognize(variant);
+        }).then(function (result) {
+          var data = result && result.data ? result.data : {};
 
-            setStatus(
-              "Enhancing and scanning " + job.description +
-              " (" + jobIndex + " of " + jobs.length + ")..."
-            );
+          if (data.text) rawText.push(data.text);
 
-            var variant = makeVariant(
-              base,
-              job.crop,
-              job.mode,
-              job.upscale
-            );
-
-            var psm = job.mode === "threshold" ? "6" : "11";
-
-            return worker.setParameters({
-              tessedit_pageseg_mode: psm,
-              preserve_interword_spaces: "1",
-              user_defined_dpi: "300"
-            }).then(function () {
-              return worker.recognize(variant);
-            }).then(function (result) {
-              var data = result && result.data ? result.data : {};
-
-              if (data.text) rawText.push(data.text);
-
-              var found = detectionsFromOCR(data, {
-                crop: job.crop,
-                upscale: job.upscale,
-                description: job.description
+          var lines = Array.isArray(data.lines)
+            ? data.lines
+            : String(data.text || "").split(/\r?\n/).filter(Boolean).map(function (text, i) {
+                return {
+                  text: text,
+                  confidence: data.confidence || 0,
+                  bbox: {
+                    x0: 0, x1: 0,
+                    y0: i * 24, y1: i * 24 + 20
+                  }
+                };
               });
 
-              candidates = candidates.concat(found);
+          candidates = candidates.concat(
+            parseLines(lines, job, data.confidence || 0)
+          );
 
-              // Release the pixel buffer from the current variant.
-              variant.width = 1;
-              variant.height = 1;
+          variant.width = 1;
+          variant.height = 1;
 
-              return runNextJob();
-            });
-          }
-
-          return runNextJob().then(function () {
-            return worker.terminate().then(function () {
-              var uniqueDetections = deduplicateDetections(
-                candidates,
-                base.width,
-                base.height
-              );
-
-              var groups = groupDetections(uniqueDetections);
-
-              renderScanResults(groups);
-
-              var labelCount = uniqueDetections.length;
-
-              var qtySum = uniqueDetections.reduce(function (sum, item) {
-                return sum + item.quantity;
-              }, 0);
-
-              var excerpt = rawText.join("\n--- OCR pass ---\n").slice(0, 2600);
-
-              setStatus(
-                "Scan finished: " + labelCount +
-                " unique handwritten label(s), grouped into " +
-                groups.length + " code/language total(s). Detected quantities sum to " +
-                qtySum + ". Review the table before adding.\n\nOCR text excerpt:\n" +
-                excerpt
-              );
-            });
-          }).catch(function (error) {
-            return worker.terminate().catch(function () {}).then(function () {
-              throw error;
-            });
-          });
+          return next();
         });
+      }
+
+      return next().then(function () {
+        var unique = deduplicateDetections(candidates, base);
+        var groups = groupDetections(unique);
+
+        renderScanResults(groups);
+
+        var labelsCount = unique.length;
+        var sum = unique.reduce(function (n, item) {
+          return n + item.quantity;
+        }, 0);
+
+        setStatus(
+          "Scan finished: " + labelsCount +
+          " unique box label(s), combined into " + groups.length +
+          " code/language total(s). Detected quantity sum: " + sum +
+          ". Review and correct all quantities before adding.\n\nOCR text sample:\n" +
+          rawText.join("\n---\n").slice(0, 1800)
+        );
       });
-    }).catch(function (error) {
-      setStatus(
-        "Photo scan failed: " + error.message +
-        "\nTry a closer, brighter photo with the marker codes visible."
-      );
-    }).then(function () {
-      button.disabled = false;
+    }).finally(function () {
+      scanning = false;
+
+      if (button) button.disabled = !cameraStream;
+      if (photoButton) photoButton.disabled = false;
+    });
+  }
+
+  function scanCurrentView() {
+    var video = document.getElementById("camera-video");
+
+    if (!cameraStream || !video || !video.videoWidth) {
+      alert("Start the camera and wait for the live preview before scanning.");
+      return;
+    }
+
+    try {
+      var base = makeBaseCanvas(video);
+
+      scanCanvas(base).catch(function (error) {
+        setStatus("Scan failed: " + error.message);
+      });
+    } catch (error) {
+      setStatus("Could not capture the camera frame: " + error.message);
+    }
+  }
+
+  function scanUploadedPhoto() {
+    var input = document.getElementById("photo-upload");
+    var file = input && input.files ? input.files[0] : null;
+
+    if (!file) {
+      alert("Choose an image first.");
+      return;
+    }
+
+    var preview = document.getElementById("preview");
+
+    if (preview.dataset.url) {
+      URL.revokeObjectURL(preview.dataset.url);
+    }
+
+    preview.dataset.url = URL.createObjectURL(file);
+    preview.src = preview.dataset.url;
+    preview.style.display = "block";
+
+    setStatus("Preparing uploaded photo...");
+
+    canvasFromFile(file).then(scanCanvas).catch(function (error) {
+      setStatus("Photo scan failed: " + error.message);
     });
   }
 
@@ -1479,7 +1212,7 @@
     link.click();
     link.remove();
 
-    window.setTimeout(function () {
+    setTimeout(function () {
       URL.revokeObjectURL(url);
     }, 2000);
   }
@@ -1488,18 +1221,18 @@
     var rows = [["Code", "Category", "Language", "Quantity"]];
 
     Object.keys(inventory).sort().forEach(function (key) {
-      var separator = key.indexOf(":");
-      var language = separator >= 0 ? key.slice(0, separator) : "";
-      var code = separator >= 0 ? key.slice(separator + 1) : key;
+      var p = key.indexOf(":");
+      var lang = p >= 0 ? key.slice(0, p) : "";
+      var code = p >= 0 ? key.slice(p + 1) : key;
 
-      if (!isCodeActive(code)) return;
-
-      rows.push([
-        code,
-        getCategory(code),
-        language,
-        Number(inventory[key]) || 0
-      ]);
+      if (isActive(code)) {
+        rows.push([
+          code,
+          getCategory(code),
+          lang,
+          Number(inventory[key]) || 0
+        ]);
+      }
     });
 
     var csv = "\uFEFF" + rows.map(function (row) {
@@ -1515,6 +1248,31 @@
     );
   }
 
+  function getSharedStrings(zip) {
+    var file = zip.file("xl/sharedStrings.xml");
+
+    if (!file) return Promise.resolve([]);
+
+    return file.async("string").then(function (xml) {
+      var doc = new DOMParser().parseFromString(xml, "application/xml");
+      var items = doc.getElementsByTagName("si");
+      var out = [];
+
+      for (var i = 0; i < items.length; i++) {
+        var nodes = items[i].getElementsByTagName("t");
+        var text = "";
+
+        for (var j = 0; j < nodes.length; j++) {
+          text += nodes[j].textContent || "";
+        }
+
+        out.push(text);
+      }
+
+      return out;
+    });
+  }
+
   function decodeXml(value) {
     return String(value || "")
       .replace(/&lt;/g, "<")
@@ -1524,57 +1282,28 @@
       .replace(/&amp;/g, "&");
   }
 
-  function getSharedStrings(zip) {
-    var file = zip.file("xl/sharedStrings.xml");
-
-    if (!file) return Promise.resolve([]);
-
-    return file.async("string").then(function (xml) {
-      var doc = new DOMParser().parseFromString(xml, "application/xml");
-      var items = doc.getElementsByTagName("si");
-      var strings = [];
-
-      for (var i = 0; i < items.length; i++) {
-        var textNodes = items[i].getElementsByTagName("t");
-        var text = "";
-
-        for (var j = 0; j < textNodes.length; j++) {
-          text += textNodes[j].textContent || "";
-        }
-
-        strings.push(text);
-      }
-
-      return strings;
-    });
-  }
-
   function cellText(cell, sharedStrings) {
     if (!cell) return "";
 
     var type = cell.getAttribute("t") || "";
 
     if (type === "s") {
-      var sharedValue = cell.getElementsByTagName("v")[0];
-
-      return sharedValue
-        ? (sharedStrings[Number(sharedValue.textContent)] || "")
-        : "";
+      var v = cell.getElementsByTagName("v")[0];
+      return v ? (sharedStrings[Number(v.textContent)] || "") : "";
     }
 
     if (type === "inlineStr") {
-      var textNodes = cell.getElementsByTagName("t");
-      var inlineText = "";
+      var ts = cell.getElementsByTagName("t");
+      var inline = "";
 
-      for (var i = 0; i < textNodes.length; i++) {
-        inlineText += textNodes[i].textContent || "";
+      for (var i = 0; i < ts.length; i++) {
+        inline += ts[i].textContent || "";
       }
 
-      return inlineText;
+      return inline;
     }
 
     var value = cell.getElementsByTagName("v")[0];
-
     return value ? decodeXml(value.textContent) : "";
   }
 
@@ -1591,11 +1320,9 @@
     var cells = rowCells(row);
 
     for (var i = 0; i < cells.length; i++) {
-      if (
-        (cells[i].getAttribute("r") || "").match(
-          new RegExp("^" + column + "\\d+$")
-        )
-      ) {
+      if ((cells[i].getAttribute("r") || "").match(
+        new RegExp("^" + column + "\\d+$")
+      )) {
         return cells[i];
       }
     }
@@ -1603,16 +1330,13 @@
     return null;
   }
 
-  function rowLabel(row, sharedStrings) {
-    return cellText(
-      findColumnCell(row, "A"),
-      sharedStrings
-    ).trim();
+  function rowLabel(row, strings) {
+    return cellText(findColumnCell(row, "A"), strings).trim();
   }
 
-  function readCodeFromLabel(label) {
-    var match = String(label || "").match(/^\s*\(([^)]+)\)/);
-    return match ? normCode(match[1]) : "";
+  function codeFromLabel(label) {
+    var m = String(label || "").match(/^\s*\(([^)]+)\)/);
+    return m ? normCode(m[1]) : "";
   }
 
   function categoryFromHeader(label) {
@@ -1628,22 +1352,22 @@
     return "";
   }
 
-  function importCustomCodesFromTemplate(zip, sharedStrings) {
+  function importTemplateCodes(zip, strings) {
     var file = zip.file("xl/worksheets/sheet1.xml");
 
     if (!file) return Promise.resolve(false);
 
     return file.async("string").then(function (xml) {
       var doc = new DOMParser().parseFromString(xml, "application/xml");
-      var sheetData = doc.getElementsByTagName("sheetData")[0];
+      var data = doc.getElementsByTagName("sheetData")[0];
 
-      if (!sheetData) return false;
+      if (!data) return false;
 
       var rows = Array.prototype.filter.call(
-        sheetData.childNodes,
-        function (node) {
-          return node.nodeType === 1 &&
-            (node.localName || node.nodeName) === "row";
+        data.childNodes,
+        function (n) {
+          return n.nodeType === 1 &&
+            (n.localName || n.nodeName) === "row";
         }
       );
 
@@ -1651,20 +1375,19 @@
       var changed = false;
 
       rows.forEach(function (row, index) {
-        var label = rowLabel(row, sharedStrings);
+        var label = rowLabel(row, strings);
         var header = categoryFromHeader(label);
 
         if (header) {
           if (!(index === 0 && header === "Bibles")) {
             currentCategory = header;
           }
-
           return;
         }
 
-        var code = readCodeFromLabel(label);
+        var code = codeFromLabel(label);
 
-        if (!code || validCodes[code] || isCustomCode(code)) {
+        if (!code || validCodes[code] || isCustom(code)) {
           return;
         }
 
@@ -1689,9 +1412,7 @@
         { cache: "no-store" }
       ).then(function (response) {
         if (!response.ok) {
-          throw new Error(
-            "September-Inventory.xlsx was not found beside index.html."
-          );
+          throw new Error("September-Inventory.xlsx was not found beside index.html.");
         }
 
         return response.arrayBuffer();
@@ -1701,48 +1422,41 @@
     });
   }
 
-  function findInsertionIndex(labels, category) {
+  function insertionIndex(labels, category) {
     var wanted = String(category || "Books").toLowerCase();
-    var headerIndex = -1;
+    var header = -1;
 
     for (var i = 1; i < labels.length; i++) {
-      if (
-        String(labels[i] || "").trim().toLowerCase() === wanted
-      ) {
-        headerIndex = i;
+      if (String(labels[i] || "").trim().toLowerCase() === wanted) {
+        header = i;
         break;
       }
     }
 
-    if (headerIndex < 0) return labels.length;
-    if (wanted === "public magazines") return labels.length;
+    if (header < 0 || wanted === "public magazines") {
+      return labels.length;
+    }
 
-    var knownHeaders = publicationCategories.map(function (item) {
+    var known = publicationCategories.map(function (item) {
       return item.value.toLowerCase();
     });
 
-    var nextSection = labels.length;
+    var next = labels.length;
 
-    for (var j = headerIndex + 1; j < labels.length; j++) {
-      if (
-        knownHeaders.indexOf(
-          String(labels[j] || "").trim().toLowerCase()
-        ) >= 0
-      ) {
-        nextSection = j;
+    for (var j = header + 1; j < labels.length; j++) {
+      if (known.indexOf(String(labels[j] || "").trim().toLowerCase()) >= 0) {
+        next = j;
         break;
       }
     }
 
-    for (var k = headerIndex + 1; k < nextSection; k++) {
-      if (
-        String(labels[k] || "").trim().toLowerCase() === "others"
-      ) {
+    for (var k = header + 1; k < next; k++) {
+      if (String(labels[k] || "").trim().toLowerCase() === "others") {
         return k;
       }
     }
 
-    return nextSection;
+    return next;
   }
 
   function makeCustomRow(doc, rowNumber, code) {
@@ -1759,21 +1473,21 @@
     a.setAttribute("s", "5");
     a.setAttribute("t", "inlineStr");
 
-    var inlineString = doc.createElementNS(ns, "is");
-    var text = doc.createElementNS(ns, "t");
+    var is = doc.createElementNS(ns, "is");
+    var t = doc.createElementNS(ns, "t");
+    t.textContent = "(" + code + ")";
 
-    text.textContent = "(" + code + ")";
-    inlineString.appendChild(text);
-    a.appendChild(inlineString);
+    is.appendChild(t);
+    a.appendChild(is);
 
     var b = doc.createElementNS(ns, "c");
     b.setAttribute("r", "B" + rowNumber);
     b.setAttribute("s", "6");
     b.setAttribute("t", "n");
 
-    var value = doc.createElementNS(ns, "v");
-    value.textContent = "0";
-    b.appendChild(value);
+    var v = doc.createElementNS(ns, "v");
+    v.textContent = "0";
+    b.appendChild(v);
 
     row.appendChild(a);
     row.appendChild(b);
@@ -1812,43 +1526,41 @@
       cell.removeChild(cell.firstChild);
     }
 
-    var value = doc.createElementNS(ns, "v");
-    value.textContent = String(Number(quantity) || 0);
-
-    cell.appendChild(value);
+    var v = doc.createElementNS(ns, "v");
+    v.textContent = String(Number(quantity) || 0);
+    cell.appendChild(v);
   }
 
-  function updateWorksheet(xml, language, sharedStrings, mode) {
+  function updateWorksheet(xml, language, strings, mode) {
     var doc = new DOMParser().parseFromString(xml, "application/xml");
 
     if (doc.getElementsByTagName("parsererror").length) {
-      throw new Error("The workbook contains invalid worksheet XML.");
+      throw new Error("Invalid worksheet XML.");
     }
 
-    var sheetData = doc.getElementsByTagName("sheetData")[0];
+    var data = doc.getElementsByTagName("sheetData")[0];
+    if (!data) return xml;
 
-    if (!sheetData) return xml;
-
-    var originalRows = Array.prototype.filter.call(
-      sheetData.childNodes,
-      function (node) {
-        return node.nodeType === 1 &&
-          (node.localName || node.nodeName) === "row";
+    var rows = Array.prototype.filter.call(
+      data.childNodes,
+      function (n) {
+        return n.nodeType === 1 &&
+          (n.localName || n.nodeName) === "row";
       }
     );
 
-    var retainedRows = [];
+    var retained = [];
 
-    originalRows.forEach(function (row) {
-      var code = readCodeFromLabel(rowLabel(row, sharedStrings));
+    rows.forEach(function (row) {
+      var code = codeFromLabel(rowLabel(row, strings));
 
-      if (code && isCustomCode(code)) return;
+      if (code && isCustom(code)) return;
 
-      retainedRows.push(row);
+      retained.push(row);
     });
 
-    var labels = retainedRows.map(function (row) {
-      return rowLabel(row, sharedStrings);
+    var labels = retained.map(function (row) {
+      return rowLabel(row, strings);
     });
 
     var insertions = Object.create(null);
@@ -1856,15 +1568,14 @@
     Object.keys(customPublications).forEach(function (code) {
       if (customPublications[code].active === false) return;
 
-      var category = customPublications[code].category;
+      var category = validCategory(customPublications[code].category)
+        ? customPublications[code].category
+        : "Books";
 
-      if (!validCategory(category)) category = "Books";
+      var idx = insertionIndex(labels, category);
 
-      var index = findInsertionIndex(labels, category);
-
-      if (!insertions[index]) insertions[index] = [];
-
-      insertions[index].push(code);
+      if (!insertions[idx]) insertions[idx] = [];
+      insertions[idx].push(code);
     });
 
     Object.keys(insertions).forEach(function (key) {
@@ -1873,31 +1584,29 @@
 
     var planned = [];
 
-    for (var i = 0; i <= retainedRows.length; i++) {
+    for (var i = 0; i <= retained.length; i++) {
       (insertions[i] || []).forEach(function (code) {
-        planned.push({ customCode: code });
+        planned.push({ code: code });
       });
 
-      if (i < retainedRows.length) {
-        planned.push({ row: retainedRows[i] });
+      if (i < retained.length) {
+        planned.push({ row: retained[i] });
       }
     }
 
-    originalRows.forEach(function (row) {
-      sheetData.removeChild(row);
+    rows.forEach(function (row) {
+      data.removeChild(row);
     });
 
     planned.forEach(function (item, index) {
-      var rowNumber = index + 1;
-      var row = item.customCode
-        ? makeCustomRow(doc, rowNumber, item.customCode)
+      var rn = index + 1;
+      var row = item.code
+        ? makeCustomRow(doc, rn, item.code)
         : item.row;
 
-      if (!item.customCode) {
-        renumberRow(row, rowNumber);
-      }
+      if (!item.code) renumberRow(row, rn);
 
-      sheetData.appendChild(row);
+      data.appendChild(row);
     });
 
     var dimension = doc.getElementsByTagName("dimension")[0];
@@ -1907,46 +1616,48 @@
     }
 
     var finalRows = Array.prototype.filter.call(
-      sheetData.childNodes,
-      function (node) {
-        return node.nodeType === 1 &&
-          (node.localName || node.nodeName) === "row";
+      data.childNodes,
+      function (n) {
+        return n.nodeType === 1 &&
+          (n.localName || n.nodeName) === "row";
       }
     );
 
     finalRows.forEach(function (row, index) {
-      var rowNumber = Number(row.getAttribute("r") || index + 1);
-      var code = readCodeFromLabel(rowLabel(row, sharedStrings));
+      var rn = Number(row.getAttribute("r") || index + 1);
+      var code = codeFromLabel(rowLabel(row, strings));
 
       if (!code || !isCodeValid(code)) return;
 
-      var quantity = mode === "template"
-        ? 0
-        : (Number(inventory[language + ":" + code]) || 0);
-
-      setNumericCell(row, rowNumber, quantity, doc);
+      setNumericCell(
+        row,
+        rn,
+        mode === "template"
+          ? 0
+          : (Number(inventory[language + ":" + code]) || 0),
+        doc
+      );
     });
 
     return new XMLSerializer().serializeToString(doc);
   }
 
   function transformWorkbook(zip, mode) {
-    return getSharedStrings(zip).then(function (sharedStrings) {
-      return importCustomCodesFromTemplate(zip, sharedStrings).then(function () {
+    return getSharedStrings(zip).then(function (strings) {
+      return importTemplateCodes(zip, strings).then(function () {
         var sheets = [
-          { path: "xl/worksheets/sheet1.xml", language: "TG" },
-          { path: "xl/worksheets/sheet2.xml", language: "E" }
+          { path: "xl/worksheets/sheet1.xml", lang: "TG" },
+          { path: "xl/worksheets/sheet2.xml", lang: "E" }
         ];
 
         return Promise.all(sheets.map(function (sheet) {
           var file = zip.file(sheet.path);
-
           if (!file) return Promise.resolve();
 
           return file.async("string").then(function (xml) {
             zip.file(
               sheet.path,
-              updateWorksheet(xml, sheet.language, sharedStrings, mode)
+              updateWorksheet(xml, sheet.lang, strings, mode)
             );
           });
         })).then(function () {
@@ -1957,10 +1668,10 @@
   }
 
   function exportExcel() {
-    var monthSelect = document.getElementById("report-month");
+    var month = document.getElementById("report-month");
     var button = document.getElementById("export");
 
-    selectedMonth = monthSelect ? monthSelect.value : selectedMonth;
+    selectedMonth = month ? month.value : selectedMonth;
 
     if (button) {
       button.disabled = true;
@@ -1976,19 +1687,13 @@
       });
     }).then(function (blob) {
       downloadBlob(blob, selectedMonth + "-Inventory.xlsx");
-
-      setStatus(
-        "Downloaded " + selectedMonth +
-        "-Inventory.xlsx with current active inventory quantities."
-      );
+      setStatus("Downloaded " + selectedMonth + "-Inventory.xlsx.");
     }).catch(function (error) {
-      console.warn("Excel export failed; downloading CSV instead.", error);
-
+      console.warn("Excel export failed; using CSV fallback.", error);
       downloadCSV(selectedMonth);
 
       setStatus(
-        "The formatted workbook could not be created. A CSV backup was downloaded. " +
-        "Check that September-Inventory.xlsx is in the published repository."
+        "Excel export failed, so a CSV backup was downloaded. Check September-Inventory.xlsx in the repository."
       );
     }).then(function () {
       if (button) {
@@ -1999,10 +1704,8 @@
   }
 
   function downloadUpdatedTemplate() {
-    if (!window.confirm(
-      "Create an updated template copy? Active custom codes will be included, " +
-      "deleted custom codes removed, and all quantities reset to zero. " +
-      "This downloads a file; it does not directly modify GitHub."
+    if (!confirm(
+      "Create an updated blank template? Active custom codes will be included, deleted custom codes removed, and quantities reset to zero. This downloads a file; it does not change GitHub directly."
     )) {
       return;
     }
@@ -2022,24 +1725,14 @@
         mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       });
     }).then(function (blob) {
-      downloadBlob(
-        blob,
-        "September-Inventory-UPDATED-TEMPLATE.xlsx"
-      );
+      downloadBlob(blob, "September-Inventory-UPDATED-TEMPLATE.xlsx");
 
       setStatus(
-        "Updated template downloaded. To make changes permanent for all users, " +
-        "replace September-Inventory.xlsx in your GitHub repository with this file, " +
-        "renamed to September-Inventory.xlsx."
+        "Template downloaded. To publish changes for everyone, replace September-Inventory.xlsx in GitHub with this file renamed to September-Inventory.xlsx."
       );
     }).catch(function (error) {
-      console.error("Template update failed.", error);
-
-      setStatus("Could not create the updated template: " + error.message);
-
-      alert(
-        "Could not create the updated template. Make sure September-Inventory.xlsx is available and try again."
-      );
+      setStatus("Template update failed: " + error.message);
+      alert("Could not create the template. Check that September-Inventory.xlsx is available.");
     }).then(function () {
       if (button) {
         button.disabled = false;
@@ -2050,13 +1743,11 @@
 
   function render() {
     app = document.getElementById("app");
-
     if (!app) return;
 
     var months = [
-      "January", "February", "March", "April",
-      "May", "June", "July", "August",
-      "September", "October", "November", "December"
+      "January", "February", "March", "April", "May", "June",
+      "July", "August", "September", "October", "November", "December"
     ];
 
     var monthOptions = months.map(function (month) {
@@ -2081,35 +1772,31 @@
       '<tr><td colspan="3" class="inv-muted">No custom publication codes registered yet.</td></tr>';
 
     var keys = Object.keys(inventory).filter(function (key) {
-      var separator = key.indexOf(":");
-      var code = separator >= 0 ? key.slice(separator + 1) : key;
-
-      return isCodeActive(code);
+      var p = key.indexOf(":");
+      return isActive(p >= 0 ? key.slice(p + 1) : key);
     }).sort();
 
     var inventoryRows = keys.map(function (key) {
-      var separator = key.indexOf(":");
-      var language = separator >= 0 ? key.slice(0, separator) : "";
-      var code = separator >= 0 ? key.slice(separator + 1) : key;
+      var p = key.indexOf(":");
+      var lang = p >= 0 ? key.slice(0, p) : "";
+      var code = p >= 0 ? key.slice(p + 1) : key;
 
       return "<tr><td>" + escapeHtml(code) +
         "</td><td>" + escapeHtml(getCategory(code)) +
-        "</td><td>" + escapeHtml(language) +
+        "</td><td>" + escapeHtml(lang) +
         "</td><td>" + escapeHtml(inventory[key]) +
         '</td><td><button type="button" class="inv-btn danger" data-delete="' +
         escapeHtml(key) + '">Delete</button></td></tr>';
     }).join("");
 
     var historyRows = history.map(function (item, index) {
-      var deleted = isDeletedCode(item.code);
-
-      return '<div' +
-        (deleted ? ' style="color:#667085"' : "") +
+      return "<div" +
+        (isDeleted(item.code) ? ' style="color:#667085"' : "") +
         ">" + (index + 1) + ". " +
         escapeHtml(item.code) + " - " +
         escapeHtml(item.language) + " — " +
         escapeHtml(item.quantity) +
-        (deleted ? " (publication deleted; history kept)" : "") +
+        (isDeleted(item.code) ? " (deleted; history kept)" : "") +
         "</div>";
     }).join("");
 
@@ -2118,97 +1805,84 @@
     }, 0);
 
     app.innerHTML = [
-      '<section class="inv-card"><h1 class="inv-title">Inventory Scanner</h1><div class="inv-muted">Scan handwritten publication codes on groups of boxes, process checklists, and prepare reports.</div></section>',
+      '<section class="inv-card"><h1 class="inv-title">Inventory Scanner</h1><p class="inv-muted">Scan handwritten codes on publication boxes, process checklists, and prepare monthly reports.</p></section>',
 
-      '<section class="inv-card"><h2>1. Scan Publication</h2><p class="inv-muted">Take a photo with handwritten box labels in view. The scanner enlarges overlapping regions, tries enhanced and black-and-white versions, groups repeat labels, and sums quantities. Review the result before adding.</p>',
-      '<div class="inv-controls"><label for="photo">Capture or upload photo:</label><input id="photo" type="file" accept="image/*" capture="environment"><button type="button" class="inv-btn" id="read">Scan Photo</button></div>',
-      '<img id="preview" alt="Selected photo preview"><div id="status" aria-live="polite">Ready. Use a clear photo where handwritten code, language, and quantity are visible.</div><div id="scan-results"></div></section>',
+      '<section class="inv-card"><h2>1. Live Camera Scanner</h2><p class="inv-muted">On Android, allow camera access and use the rear camera. Point at a group of handwritten labels, hold steady, then tap Scan Current View. OCR processes one frame at a time to avoid automatically counting the same box repeatedly.</p>',
 
-      '<section class="inv-card"><h2>2. Paste a Checklist</h2><div class="inv-muted">Use one line per item, like CODE - TG - 1500 + 375 or CODE - E - 25.</div>',
-      '<textarea id="bulk-notepad" placeholder="Example:\nnwt - TG - 1500 + 375 + 2125\nbhs - E - 25 + 10\nS-4 - TG - 5"></textarea>',
-      '<div class="inv-controls"><button type="button" class="inv-btn" id="add-bulk">Process List</button><button type="button" class="inv-btn secondary" id="clear-text">Clear Text</button></div></section>',
+      '<div class="inv-controls"><button type="button" class="inv-btn" id="start-camera">Start Camera</button><button type="button" class="inv-btn secondary" id="stop-camera" disabled>Stop Camera</button><button type="button" class="inv-btn success" id="scan-current-view" disabled>Scan Current View</button></div>',
 
-      '<section class="inv-card"><h2>3. Manage Publication Codes</h2><p class="inv-muted">Add new publications and choose their category. Delete custom publications when no longer required.</p>',
-      '<form id="publication-form"><div class="publication-fields"><label for="new-code">Publication Code<input id="new-code" type="text" maxlength="40" placeholder="e.g. newbook1" autocomplete="off" required></label>',
-      '<label for="new-category">Category<select id="new-category">' + categoryOptions + '</select></label><button type="submit" class="inv-btn">Add / Update Code</button></div></form>',
-      '<div class="inv-table-wrap"><table><thead><tr><th>Custom Code</th><th>Category</th><th>Action</th></tr></thead><tbody>' + customRows + '</tbody></table></div>',
-      '<p class="inv-muted">To make changes permanent for everyone, download the updated template and replace September-Inventory.xlsx in GitHub with it.</p><div class="inv-controls"><button type="button" class="inv-btn success" id="download-template">Download Updated Template</button></div></section>',
+      '<video id="camera-video" autoplay muted playsinline hidden></video>',
+
+      '<p class="inv-muted">Photo fallback: capture or upload a picture, then scan it.</p><div class="inv-controls"><input type="file" id="photo-upload" accept="image/*" capture="environment"><button type="button" class="inv-btn secondary" id="scan-uploaded-photo">Scan Uploaded Photo</button></div>',
+
+      '<img id="preview" alt="Uploaded photo preview"><div id="status" aria-live="polite">Ready. Start the camera or upload a photo.</div><div id="scan-results"></div></section>',
+
+      '<section class="inv-card"><h2>2. Paste a Checklist</h2><p class="inv-muted">Use one line per item, like CODE - TG - 1500 + 375 or CODE - E - 25.</p><textarea id="bulk-notepad" placeholder="Example:\nwp26.1 - TG - 600 + 600\ng18.2 - E - 500\nnwt - TG - 16"></textarea><div class="inv-controls"><button type="button" class="inv-btn" id="add-bulk">Process List</button><button type="button" class="inv-btn secondary" id="clear-text">Clear Text</button></div></section>',
+
+      '<section class="inv-card"><h2>3. Manage Publication Codes</h2><p class="inv-muted">Add new publications and choose their category. Delete custom codes when no longer needed.</p><form id="publication-form"><div class="publication-fields"><label for="new-code">Publication Code<input id="new-code" maxlength="40" placeholder="e.g. newbook1" required></label><label for="new-category">Category<select id="new-category">' + categoryOptions + '</select></label><button type="submit" class="inv-btn">Add / Update Code</button></div></form><div class="inv-table-wrap"><table><thead><tr><th>Custom Code</th><th>Category</th><th>Action</th></tr></thead><tbody>' + customRows + '</tbody></table></div><p class="inv-muted">Download the updated template and replace September-Inventory.xlsx in GitHub to make code additions/deletions permanent for all visitors.</p><div class="inv-controls"><button type="button" class="inv-btn success" id="download-template">Download Updated Template</button></div></section>',
 
       '<section class="inv-card"><h2>4. History</h2><div class="inv-history">' +
         (historyRows || '<div class="inv-muted">No history yet.</div>') +
       '</div></section>',
 
-      '<section class="inv-card"><h2>5. Monthly Reporting</h2><div class="inv-controls"><label for="report-month">Reporting Month:</label><select id="report-month">' + monthOptions + '</select>',
-      '<button type="button" class="inv-btn" id="export">Download Excel</button><button type="button" class="inv-btn danger" id="clear">Clear Entries</button></div>',
-      '<p><strong>Running Total:</strong> ' + total.toLocaleString() + '</p><div class="inv-table-wrap"><table><thead><tr><th>Code</th><th>Category</th><th>Language</th><th>Total</th><th>Action</th></tr></thead><tbody>' +
+      '<section class="inv-card"><h2>5. Monthly Reporting</h2><div class="inv-controls"><label for="report-month">Reporting Month:</label><select id="report-month">' + monthOptions + '</select><button type="button" class="inv-btn" id="export">Download Excel</button><button type="button" class="inv-btn danger" id="clear">Clear Entries</button></div><p><strong>Running Total:</strong> ' + total.toLocaleString() + '</p><div class="inv-table-wrap"><table><thead><tr><th>Code</th><th>Category</th><th>Language</th><th>Total</th><th>Action</th></tr></thead><tbody>' +
         (inventoryRows || '<tr><td colspan="5">No active inventory entries yet.</td></tr>') +
       '</tbody></table></div></section>'
     ].join("");
 
-    document.getElementById("add-bulk").addEventListener(
-      "click",
-      processBulkInput
-    );
+    document.getElementById("start-camera").addEventListener("click", startCamera);
+    document.getElementById("stop-camera").addEventListener("click", stopCamera);
+    document.getElementById("scan-current-view").addEventListener("click", scanCurrentView);
+    document.getElementById("scan-uploaded-photo").addEventListener("click", scanUploadedPhoto);
+    document.getElementById("add-bulk").addEventListener("click", processBulkInput);
 
-    document.getElementById("clear-text").addEventListener(
-      "click",
-      function () {
-        document.getElementById("bulk-notepad").value = "";
-        setStatus("Checklist text cleared.");
+    document.getElementById("clear-text").addEventListener("click", function () {
+      document.getElementById("bulk-notepad").value = "";
+      setStatus("Checklist text cleared.");
+    });
+
+    document.getElementById("publication-form").addEventListener("submit", addPublicationCode);
+    document.getElementById("download-template").addEventListener("click", downloadUpdatedTemplate);
+    document.getElementById("export").addEventListener("click", exportExcel);
+    document.getElementById("clear").addEventListener("click", clearAll);
+
+    document.getElementById("report-month").addEventListener("change", function (event) {
+      selectedMonth = event.target.value;
+    });
+
+    Array.prototype.forEach.call(app.querySelectorAll("[data-delete-code]"), function (button) {
+      button.addEventListener("click", function () {
+        deletePublicationCode(button.getAttribute("data-delete-code"));
+      });
+    });
+
+    Array.prototype.forEach.call(app.querySelectorAll("[data-delete]"), function (button) {
+      button.addEventListener("click", function () {
+        removeInventory(button.getAttribute("data-delete"));
+      });
+    });
+
+    // Reattach the live camera when a render refreshes the interface after saving.
+    if (cameraStream) {
+      var liveVideo = document.getElementById("camera-video");
+      var startButton = document.getElementById("start-camera");
+      var stopButton = document.getElementById("stop-camera");
+      var scanButton = document.getElementById("scan-current-view");
+
+      if (liveVideo) {
+        liveVideo.hidden = false;
+        liveVideo.srcObject = cameraStream;
+        liveVideo.play().catch(function () {});
       }
-    );
 
-    document.getElementById("publication-form").addEventListener(
-      "submit",
-      addPublicationCode
-    );
-
-    document.getElementById("download-template").addEventListener(
-      "click",
-      downloadUpdatedTemplate
-    );
-
-    Array.prototype.forEach.call(
-      app.querySelectorAll("[data-delete-code]"),
-      function (button) {
-        button.addEventListener("click", function () {
-          deletePublicationCode(
-            button.getAttribute("data-delete-code")
-          );
-        });
+      if (startButton) {
+        startButton.disabled = true;
+        startButton.textContent = "Camera On";
       }
-    );
 
-    document.getElementById("read").addEventListener(
-      "click",
-      readPhoto
-    );
-
-    document.getElementById("export").addEventListener(
-      "click",
-      exportExcel
-    );
-
-    document.getElementById("clear").addEventListener(
-      "click",
-      clearAll
-    );
-
-    document.getElementById("report-month").addEventListener(
-      "change",
-      function (event) {
-        selectedMonth = event.target.value;
-      }
-    );
-
-    Array.prototype.forEach.call(
-      app.querySelectorAll("[data-delete]"),
-      function (button) {
-        button.addEventListener("click", function () {
-          removeInventory(button.getAttribute("data-delete"));
-        });
-      }
-    );
+      if (stopButton) stopButton.disabled = false;
+      if (scanButton) scanButton.disabled = scanning;
+    }
   }
 
   function init() {
@@ -2223,14 +1897,15 @@
     addStyles();
     render();
 
-    // Import custom codes from the official template if available.
     loadTemplateZip().then(function (zip) {
-      return getSharedStrings(zip).then(function (sharedStrings) {
-        return importCustomCodesFromTemplate(zip, sharedStrings);
+      return getSharedStrings(zip).then(function (strings) {
+        return importTemplateCodes(zip, strings);
       });
     }).catch(function (error) {
       console.info("Template code sync skipped:", error.message);
     });
+
+    window.addEventListener("pagehide", stopCamera);
   }
 
   if (document.readyState === "loading") {
